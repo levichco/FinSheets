@@ -1,0 +1,136 @@
+/*
+ * Levich brand overrides for the Univer UI. Imported by the package and bundled
+ * into dist/index.css (exposed as "@levich/univer-sheets/styles.css").
+ *
+ * The brand color is primarily driven by the Levich theme object (levich-theme.ts,
+ * passed to createUniver). These CSS-variable overrides reinforce the brand on
+ * the Univer primary scale so the look is fully Levich even where the engine
+ * reads CSS variables directly. Single source of truth for the brand color.
+ */
+
+:root,
+.univer-levich {
+  /* FinOpz primary scale → Univer primary CSS variables. Must match the JS
+     theme (levich-theme.ts `finopzPrimary`): Univer reads some chrome (radio
+     buttons, Confirm CTAs, focus rings) from these CSS vars, others from the
+     theme object — keep both in sync so nothing renders the old purple. */
+  --univer-primary-50: #f2f4f7;
+  --univer-primary-100: #eaecf0;
+  --univer-primary-200: #d0d5dd;
+  --univer-primary-300: #98a2b3;
+  --univer-primary-400: #475467;
+  --univer-primary-500: #1d2939;
+  --univer-primary-600: #101828;
+  --univer-primary-700: #0a0a0a;
+  --univer-primary-800: #000000;
+  --univer-primary-900: #000000;
+
+  /* Convenience alias for host chrome built around the sheet. */
+  --levich-brand: #101828;
+}
+
+/* The container should fill its parent so the canvas sizes correctly. */
+.univer-levich {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Levich toolbar theming — restyle Univer's EXISTING toolbar/buttons to our  */
+/* design (we keep all operations, including the ⋮ overflow). Scoped + uses    */
+/* !important to win over Univer's utility classes.                          */
+/* ------------------------------------------------------------------------- */
+
+/* Operations bar: edge-to-edge, subtly tinted band, taller. */
+.univer-levich [data-u-comp="ribbon-toolbar"] {
+  width: 100% !important;
+  min-height: 50px !important;
+  padding: 5px 14px !important;
+  background: #f9fafb !important;
+  border-bottom: 1px solid #eaecf0 !important;
+}
+
+/* Bigger, rounded operation buttons with a Levich-brand hover. */
+.univer-levich [data-u-comp="ribbon-toolbar"] button,
+.univer-levich .univer-toolbar-selector-root,
+.univer-levich .univer-toolbar-button-selector-root {
+  border-radius: 8px !important;
+  transition: background-color 0.12s ease, color 0.12s ease !important;
+}
+
+.univer-levich [data-u-comp="ribbon-toolbar"] button:hover,
+.univer-levich .univer-toolbar-selector-trigger:hover,
+.univer-levich .univer-toolbar-button-selector-trigger:hover {
+  background-color: var(--univer-primary-50, #f1eefc) !important;
+  color: var(--univer-primary-700, #3a279c) !important;
+}
+
+/* Slightly larger icons to read bigger. */
+.univer-levich [data-u-comp="ribbon-toolbar"] svg {
+  width: 18px !important;
+  height: 18px !important;
+}
+
+/* Tighter tooltips — reduce the gap to the trigger + a more compact look.
+   (Univer tooltips portal to <body>, so this rule is intentionally global.) */
+.univer-tooltip {
+  margin: 0 !important;
+  padding: 4px 8px !important;
+  font-size: 12px !important;
+  line-height: 1.3 !important;
+  border-radius: 6px !important;
+}
+
+/* ===== Filter panel — FinOpz / Google-Sheets-style polish =================
+   Univer's native filter dropdown exposes stable `data-u-comp` hooks. We can't
+   restructure its layout (Asc/Desc + By Values/Colors/Conditions tabs), but we
+   restyle it to a clean, branded card. Buttons + checkboxes are already black
+   via the theme's primary scale. (Portals to <body>, so selectors are global.) */
+[data-u-comp="sheets-filter-panel"] {
+  font-family: "Work Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif !important;
+}
+/* The card (only the root carries the shadow utility). */
+[data-u-comp="sheets-filter-panel"].univer-shadow-lg {
+  border-radius: 14px !important;
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.16), 0 0 0 1px #eaecf0 !important;
+  padding: 16px !important;
+  width: 340px !important;
+}
+/* Value checklist rows — clean hover + typography. */
+[data-u-comp="sheets-filter-panel-values-item"] {
+  border-radius: 8px !important;
+  padding: 3px 6px !important;
+}
+[data-u-comp="sheets-filter-panel-values-item"]:hover {
+  background: #f9fafb !important;
+}
+[data-u-comp="sheets-filter-panel-values-item-text"] {
+  color: #344054 !important;
+  font-size: 13px !important;
+}
+[data-u-comp="sheets-filter-panel-values-item-count"] {
+  color: #98a2b3 !important;
+  font-size: 12px !important;
+}
+/* Footer — separator above Clear / Cancel / OK. */
+[data-u-comp="sheets-filter-panel-footer"] {
+  margin-top: 14px !important;
+  padding-top: 12px !important;
+  border-top: 1px solid #eaecf0 !important;
+}
+/* Sort embed: stack "Sort A to Z" / "Sort Z to A" as Google-style menu rows
+   (Univer lays them out as two side-by-side grid columns by default). */
+.univer-grid:has(> [data-u-comp="sort-panel-item-handler"]) {
+  grid-auto-flow: row !important;
+  grid-template-columns: 1fr !important;
+  gap: 2px !important;
+}
+[data-u-comp="sort-panel-item-handler"] {
+  width: 100% !important;
+}
+[data-u-comp="sort-panel-item-handler"] > * {
+  width: 100% !important;
+  justify-content: flex-start !important;
+  border-radius: 8px !important;
+}

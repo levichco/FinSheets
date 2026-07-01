@@ -1,0 +1,17 @@
+@levich/univer-sheets
+Copyright 2026 Levich
+
+This product includes software developed by the Univer project
+(https://github.com/dream-num/univer), licensed under the Apache License,
+Version 2.0.
+
+  Univer
+  Copyright DreamNum Inc. and Univer contributors
+  Licensed under the Apache License, Version 2.0
+
+This product also includes ExcelJS (https://github.com/exceljs/exceljs),
+licensed under the MIT License, used for spreadsheet (.xlsx) export.
+
+The Apache License, Version 2.0 applies to this package; see the LICENSE file.
+A copy of the Apache License is also available at
+http://www.apache.org/licenses/LICENSE-2.0
