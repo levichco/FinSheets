@@ -5,6 +5,37 @@ follows semantic versioning. Each release records the **exact Univer engine
 version** it bundles, so a given package version is reproducible and any release
 can be rolled back to (see constitution Principle VIII).
 
+## [0.1.3] - 2026-07-07
+
+The **lazy multi-sheet product** + **Version History** + **Google Fonts** release.
+
+### Added
+- **Lazy shell-workbook** (`buildShellWorkbook`) — one workbook where every sheet is a
+  tab but only the active sheet is hydrated; opens a 33 MB / 69-sheet workbook instantly.
+- **`<SheetTabBar>`** — Google/Excel-style bottom tabs (rename · duplicate · colour ·
+  hide/unhide · move · delete-with-confirm · searchable all-sheets list · zoom · one-tab
+  scroll), the sole controller of the active sheet (native footer hidden via `sheetBar={false}`).
+- **Version History** (browser-only, IndexedDB): `createVersionStore`, `<VersionHistoryDrawer>`
+  (clock trigger, day-grouped list, Current-version badge, View original, ⋮ Name / Make a copy,
+  Restore — non-destructive), `diffSheet`/`highlightSnapshot` ("Highlight changes" /
+  "Show unmodified rows" + "No changes to this sheet in this revision"), and `readOnly` preview
+  mode on `<LevichSheet>`.
+- **Google Fonts library** — on-demand loader (`ensureGoogleFont(s)`, `ensureFontsForSnapshot`,
+  `fontsInSnapshot`, `GOOGLE_FONTS`); toolbar Font dropdown gains a search box + ~50 fonts;
+  **sticky current font** (pick once → applies to everything you type, first char included).
+- **Office-font aliasing** (`office-fonts.css`) — Calibri→Carlito etc. so imported text isn't serif.
+- **Shared `<ColorPanel>`** — full Google palette + Standard + custom HSV/hex picker, used by the
+  toolbar and the sheet-tab colour menu.
+- Host hooks for manifest-driven sheet visibility (`onHideActiveSheet` / `onShowSheet` /
+  `hiddenSheetList` / `canHideActiveSheet`).
+
+### Changed / Fixed
+- Fonts render correctly on Univer's canvas — apply after load + `refreshCanvas()` re-measure.
+- Colour picker submenus positioned correctly (`position: absolute`).
+
+### Engine
+- Univer (`@univerjs/presets`, `@univerjs/preset-sheets-core`): **0.25.0** (exact pin)
+
 ## [0.1.2] - 2026-07-06
 
 Excel-fidelity pass on `.xlsx` import (fidelity target is **Excel**, not Google Sheets).

@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { PocApp } from "./poc-app";
+import { ProductApp } from "./product-app";
 import { LevichSheet, LEVICH_BRAND, type ColumnDef, type LevichSheetHandle, type SheetData } from "../src";
 import { takeImportPayload, takeSnapshotPayload } from "../src/core/import-data";
 import { FORMULA_TESTS } from "./formula-tests";
@@ -14,11 +15,15 @@ import { FORMULA_TESTS_ALL } from "./formula-tests-all";
 const IMPORT_SNAPSHOT = takeSnapshotPayload<Record<string, unknown>>();
 const IMPORT_PAYLOAD = IMPORT_SNAPSHOT ? null : takeImportPayload();
 
-// PoC (localhost:9100/?poc): lazy multi-sheet loading — the whole workbook is
-// converted on the "backend" (scripts/xlsx-poc.mjs), split into per-sheet JSON,
-// and the FE loads only the active sheet, fetching others on tab-click.
-// See demo/poc-app.tsx.
-const POC = typeof location !== "undefined" && new URLSearchParams(location.search).has("poc");
+// Routes:
+//   localhost:9100          → ProductApp — the real FinSheets product: large
+//                             workbook, native footer tabs, lazy per-sheet load,
+//                             rename/duplicate/edit (demo/product-app.tsx).
+//   localhost:9100/?poc     → PocApp — the old lazy PoC with a custom top strip.
+//   localhost:9100/?legacy  → App — the blank sheet + formula-verify harness.
+const params = typeof location !== "undefined" ? new URLSearchParams(location.search) : new URLSearchParams();
+const POC = params.has("poc");
+const LEGACY = params.has("legacy");
 
 /** Count the visible sheets in an imported snapshot (hidden ones exist but
  *  aren't shown as tabs — matches the source app). */
@@ -358,4 +363,4 @@ function App() {
   );
 }
 
-createRoot(document.getElementById("root")!).render(POC ? <PocApp /> : <App />);
+createRoot(document.getElementById("root")!).render(POC ? <PocApp /> : LEGACY ? <App /> : <ProductApp />);

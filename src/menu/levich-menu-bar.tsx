@@ -208,9 +208,17 @@ export interface LevichMenuBarProps {
   onMakeCopy?: () => void;
   /** File ▸ Rename. Defaults to renaming the active sheet (prompt). */
   onRename?: (name: string) => void;
+  /** View ▸ Hide sheet — host hook (hides the ACTIVE sheet). Defaults to the Facade. */
+  onHideActiveSheet?: () => void;
+  /** View ▸ Show sheets ▸ — host hook to unhide + open a sheet by id. */
+  onShowSheet?: (sheetId: string) => void;
+  /** Hidden sheets for the Show-sheets submenu (host-driven). */
+  hiddenSheetList?: Array<{ sheetId: string; name: string }>;
+  /** Whether the active sheet can be hidden (host-driven). */
+  canHideActiveSheet?: boolean;
 }
 
-export function LevichMenuBar({ api, onDownload, onOpenFind, onSave, onNew, onImport, onMakeCopy, onRename }: LevichMenuBarProps) {
+export function LevichMenuBar({ api, onDownload, onOpenFind, onSave, onNew, onImport, onMakeCopy, onRename, onHideActiveSheet, onShowSheet, hiddenSheetList, canHideActiveSheet }: LevichMenuBarProps) {
   const [openMenu, setOpenMenu] = useState<number | null>(null);
   // Transient "Saved" toast (File ▸ Save / ⌘S).
   const [saved, setSaved] = useState(false);
@@ -553,8 +561,13 @@ export function LevichMenuBar({ api, onDownload, onOpenFind, onSave, onNew, onIm
       /* best effort */
     }
   };
-  // "Show sheets ▸" submenu — the current hidden sheets (recomputed each open).
+  // "Show sheets ▸" submenu — host-driven (manifest) when provided, else the Facade.
   const showSheetItems = (): MItem[] => {
+    if (onShowSheet) {
+      const h = hiddenSheetList ?? [];
+      if (!h.length) return [{ label: "No hidden sheets", disabled: true }];
+      return h.map((s) => ({ label: s.name, onClick: () => onShowSheet(s.sheetId) }));
+    }
     const h = hiddenSheets();
     if (!h.length) return [{ label: "No hidden sheets", disabled: true }];
     return h.map((s) => ({ label: s.getSheetName?.() ?? "Sheet", onClick: () => showHiddenSheet(s) }));
@@ -633,7 +646,7 @@ export function LevichMenuBar({ api, onDownload, onOpenFind, onSave, onNew, onIm
           sep: true,
           items: ZOOM_LEVELS.map((z) => ({ label: `${z}%`, onClick: () => sheet()?.zoom(z / 100) })),
         },
-        { label: "Hide sheet", sep: true, disabled: visibleSheets().length <= 1, onClick: hideActiveSheet },
+        { label: "Hide sheet", sep: true, disabled: onHideActiveSheet ? canHideActiveSheet === false : visibleSheets().length <= 1, onClick: onHideActiveSheet ?? hideActiveSheet },
         { label: "Show sheets", items: showSheetItems() },
         { label: "Full screen", onClick: toggleFullScreen, sep: true },
       ],

@@ -35,6 +35,7 @@ import {
   Underline01,
 } from "@untitledui/icons";
 import type { UniverAPI } from "../core/create-sheet";
+import { GOOGLE_FONTS, ensureGoogleFont, ensureGoogleFonts } from "../theme/google-fonts";
 import { applyFilterView, clearAllFilters, ensureFilter, loadViews, saveViews, snapshotFilters, type FilterView, type FilterViewApi } from "../features/filter-views";
 import { buildGroupView, clearGroupView, getGroupColumns, loadGroupViews, saveGroupViews, toggleGroup, type GroupByApi, type GroupRun, type GroupView } from "../features/group-by-view";
 import { insertAggregate, insertFunctionTemplate, type Aggregate, type FunctionsApi } from "../features/functions";
@@ -113,7 +114,15 @@ interface ToolbarApi {
 }
 
 const SZ = 19;
-const FONT_FAMILIES = ["Arial", "Helvetica", "Times New Roman", "Georgia", "Courier New", "Verdana"];
+// System/Office fonts first (built-in or metric substitutes), then the Google
+// Fonts library — every one loads on demand via ../theme/google-fonts.
+const FONT_FAMILIES = ["Arial", "Calibri", "Times New Roman", "Cambria", "Georgia", "Courier New", "Verdana", "Helvetica", ...GOOGLE_FONTS];
+
+// Sticky "current font": once you pick a font, every cell you subsequently COMMIT
+// adopts it (across sheets), until you pick a different one — matching the user's
+// "pick once, type anywhere in that font" model. Module-level so it survives the
+// per-sheet remount; resets on page reload (≈ opening a new document).
+let stickyFontFamily: string | null = null;
 const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48];
 const ZOOMS = [50, 75, 90, 100, 125, 150, 200];
 // The Google Sheets "123" more-formats menu, grouped with samples.
@@ -371,6 +380,34 @@ function MenuRow({ onClick, children }: { onClick: () => void; children: ReactNo
     <button type="button" onMouseDown={keepEditorFocus} onClick={onClick} style={menuItem} onMouseEnter={(e) => (e.currentTarget.style.background = "#f9fafb")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
       {children}
     </button>
+  );
+}
+
+/** Font dropdown body — search bar + ~10 visible rows (scroll for more). Batch-
+ *  loads the Google Fonts list on open so each row previews in its own typeface. */
+function FontMenu({ onPick }: { onPick: (f: string) => void }) {
+  const [q, setQ] = useState("");
+  useEffect(() => { void ensureGoogleFonts(GOOGLE_FONTS); }, []);
+  const filtered = FONT_FAMILIES.filter((f) => f.toLowerCase().includes(q.trim().toLowerCase()));
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", margin: "2px 4px 6px", border: "1px solid #e4e7ec", borderRadius: 8, color: "#667085" }}>
+        <SearchMd size={15} />
+        <input
+          autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search fonts"
+          style={{ border: "none", outline: "none", flex: 1, fontSize: 13, color: "#101828", background: "transparent", fontFamily: "inherit" }}
+        />
+      </div>
+      {/* ~10 rows tall, then scroll */}
+      <div style={{ maxHeight: 10 * 34, overflowY: "auto" }}>
+        {filtered.map((f) => (
+          <MenuRow key={f} onClick={() => onPick(f)}>
+            <span style={{ fontFamily: `"${f}", sans-serif` }}>{f}</span>
+          </MenuRow>
+        ))}
+        {filtered.length === 0 && <div style={{ padding: "10px 12px", color: "#98a2b3", fontSize: 13 }}>No fonts found</div>}
+      </div>
+    </div>
   );
 }
 
@@ -1004,8 +1041,41 @@ export function LevichToolbar({ api, onOpenFind }: LevichToolbarProps) {
   };
   const changeFont = (d: number) => applyFontSize(Math.max(6, Math.min(96, fontPt + d)));
   const applyFontFamily = (f: string) => {
-    setFontFamily(f);
-    fireStyled("sheet.command.set-range-font-family", "doc.command.set-inline-format-font-family", f);
+    setFontFamily(f); // update the toolbar indicator immediately
+    stickyFontFamily = f; // make it the sticky current font for future typing
+    // Apply AFTER the web font is loaded — Univer measures & caches text on the
+    // canvas at paint time, so setting `ff` before the font is ready bakes in a
+    // fallback that never updates. The dropdown batch-loads on open, so by pick
+    // time the font is usually already cached (applies instantly).
+    const apply = () => {
+      const api = apiOf();
+      if (editingRef.current) {
+        // Editing (Excel/Sheets behaviour): style the WHOLE cell text live by
+        // selecting all in the in-cell editor, applying the font, then collapsing
+        // the cursor to the end so continued typing appends in the new font.
+        try {
+          api?.executeCommand("doc.command.select-all");
+          api?.executeCommand("doc.command.set-inline-format-font-family", { value: f });
+          api?.executeCommand("doc.operation.move-cursor", { direction: "right" });
+        } catch { /* editor selection is best-effort */ }
+      }
+      // Always set the CELL (range) font too, so the committed value and the
+      // not-editing case are correct — font family is a whole-cell property.
+      api?.executeCommand("sheet.command.set-range-font-family", { value: f });
+      // Make it the sheet's DEFAULT font so empty cells' editors inherit it — even
+      // the FIRST typed character is correct (no async pre-arm race). Cells with an
+      // explicit font keep theirs; only default-font cells follow the new default.
+      try {
+        const ws = api?.getActiveWorkbook?.()?.getActiveSheet?.() as unknown as { getDefaultStyle?: () => unknown; setDefaultStyle?: (s: unknown) => void };
+        const cur = ws?.getDefaultStyle?.();
+        ws?.setDefaultStyle?.({ ...(cur && typeof cur === "object" ? cur : {}), ff: f });
+      } catch { /* default-style API is best-effort */ }
+      // Recompute the render skeleton so text RE-MEASURES with the now-loaded
+      // font (a plain resize doesn't invalidate Univer's cached glyph metrics).
+      try { (api?.getActiveWorkbook?.()?.getActiveSheet?.() as unknown as { refreshCanvas?: () => void })?.refreshCanvas?.(); }
+      catch { try { window.dispatchEvent(new Event("resize")); } catch { /* */ } }
+    };
+    void ensureGoogleFont(f).then(apply);
   };
   const applyTextColor = (c: string) => {
     setTextColor(c);
@@ -1103,6 +1173,15 @@ export function LevichToolbar({ api, onOpenFind }: LevichToolbarProps) {
   useEffect(() => {
     const a = apiOf();
     if (!a?.addEvent) return;
+    // Cross-sheet sticky font: when this sheet mounts and a sticky font is active,
+    // make it the sheet default so first-char typing is correct here too.
+    if (stickyFontFamily) {
+      try {
+        const ws = a.getActiveWorkbook?.()?.getActiveSheet?.() as unknown as { getDefaultStyle?: () => unknown; setDefaultStyle?: (s: unknown) => void };
+        const cur = ws?.getDefaultStyle?.();
+        ws?.setDefaultStyle?.({ ...(cur && typeof cur === "object" ? cur : {}), ff: stickyFontFamily });
+      } catch { /* */ }
+    }
     const sync = () => {
       const r = a.getActiveWorkbook()?.getActiveRange();
       if (!r) return;
@@ -1114,6 +1193,19 @@ export function LevichToolbar({ api, onOpenFind }: LevichToolbarProps) {
       if (fs) setFontPt(fs);
       const ff = r.getFontFamily?.();
       if (ff) setFontFamily(ff);
+      // Pre-arm the active EMPTY cell with the sticky font BEFORE editing starts,
+      // so the in-cell editor inherits it and even the FIRST typed character uses
+      // it (priming on edit-start runs after the trigger char). Only empty cells,
+      // so existing content keeps its font.
+      if (stickyFontFamily && ff !== stickyFontFamily) {
+        try {
+          const v = (r as unknown as { getValue?: () => unknown }).getValue?.();
+          if (v === "" || v === null || v === undefined) {
+            a.executeCommand("sheet.command.set-range-font-family", { value: stickyFontFamily });
+            setFontFamily(stickyFontFamily);
+          }
+        } catch { /* */ }
+      }
     };
     const ev = a.Event ?? {};
     const disposers = [
@@ -1121,9 +1213,23 @@ export function LevichToolbar({ api, onOpenFind }: LevichToolbarProps) {
       a.addEvent?.(ev.SelectionMoveEnd ?? "SelectionMoveEnd", sync),
       a.addEvent?.(ev.SheetEditStarted ?? "SheetEditStarted", () => {
         editingRef.current = true;
+        // Sticky font while TYPING: prime the in-cell editor with the current font
+        // so characters appear in it live (not just after commit). Deferred a tick
+        // so the editor's document/selection is ready to accept the format.
+        if (!stickyFontFamily) return;
+        const val = stickyFontFamily;
+        setTimeout(() => { try { a.executeCommand("doc.command.set-inline-format-font-family", { value: val }); } catch { /* */ } }, 0);
       }),
       a.addEvent?.(ev.SheetEditEnded ?? "SheetEditEnded", () => {
         editingRef.current = false;
+        // Sticky current font: the just-committed cell adopts the picked font, so
+        // typing in ANY cell uses it until the font is changed. Font is already
+        // loaded (it was picked), then re-measure so it paints correctly.
+        if (!stickyFontFamily) return;
+        try {
+          a.executeCommand("sheet.command.set-range-font-family", { value: stickyFontFamily });
+          (a.getActiveWorkbook()?.getActiveSheet() as unknown as { refreshCanvas?: () => void })?.refreshCanvas?.();
+        } catch { /* best-effort */ }
       }),
       // Remember the last sort applied (full params) so a saved Filter View can
       // reproduce the sorted order.
@@ -1237,8 +1343,8 @@ export function LevichToolbar({ api, onOpenFind }: LevichToolbarProps) {
         </Dropdown>
         <span style={divider} />
 
-        <Dropdown id="font" {...dd} label="Font" trigger={<span style={{ fontSize: 13, minWidth: 54, maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>{fontFamily}</span>} width={180}>
-          {(close) => FONT_FAMILIES.map((f) => <MenuRow key={f} onClick={() => { applyFontFamily(f); close(); }}><span style={{ fontFamily: f }}>{f}</span></MenuRow>)}
+        <Dropdown id="font" {...dd} label="Font" trigger={<span style={{ fontSize: 13, minWidth: 54, maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>{fontFamily}</span>} width={200}>
+          {(close) => <FontMenu onPick={(f) => { applyFontFamily(f); close(); }} />}
         </Dropdown>
         <IconBtn label="Decrease font size" onClick={() => changeFont(-1)}><span style={{ fontSize: 18, fontWeight: 500 }}>−</span></IconBtn>
         <Dropdown id="size" {...dd} label="Font size" trigger={<span style={{ fontSize: 13, minWidth: 18, textAlign: "center" }}>{fontPt}</span>} width={84}>

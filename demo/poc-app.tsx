@@ -15,6 +15,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { LevichSheet, type ColumnDef, type SheetData } from "../src";
+import "../src/theme/office-fonts.css"; // alias Calibri→Carlito etc. so text isn't serif
 
 interface SheetMeta {
   order: number;
@@ -34,6 +35,15 @@ const NO_COLUMNS: ColumnDef[] = [];
 export function PocApp() {
   const [manifest, setManifest] = useState<SheetMeta[] | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+  // Wait for the Office-substitute fonts to load, then re-render (canvas doesn't
+  // reflow on late font load) so Calibri/Arial text renders correctly, not serif.
+  const [fontsReady, setFontsReady] = useState(false);
+  useEffect(() => {
+    const wanted = ['16px Calibri', 'bold 16px Calibri', 'italic 16px Calibri', '16px Arial', 'bold 16px Arial', '16px "Times New Roman"', '16px Cambria'];
+    const done = setTimeout(() => setFontsReady(true), 1500); // fallback so it never hangs
+    Promise.all(wanted.map((f) => (document.fonts?.load(f) ?? Promise.resolve()).catch(() => {}))).then(() => { clearTimeout(done); setFontsReady(true); });
+    return () => clearTimeout(done);
+  }, []);
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [note, setNote] = useState("Loading manifest…");
   const cache = useRef(new Map<string, Snapshot>());
@@ -112,7 +122,7 @@ export function PocApp() {
       <div style={{ flex: 1, minHeight: 0 }}>
         {snap ? (
           <LevichSheet
-            key={activeId!}            // remount per sheet — each renders in ~35ms
+            key={`${activeId!}:${fontsReady}`} // remount per sheet + once fonts load
             data={NO_DATA}
             columns={NO_COLUMNS}
             snapshot={snap}

@@ -101,7 +101,14 @@ full.sheetOrder.forEach((id, i) => {
   const kb = fs.statSync(p).size / 1024;
   totalBytes += kb * 1024;
   if (kb > biggest.kb) biggest = { name: sheet?.name ?? id, kb: Math.round(kb) };
-  manifest.push({ order: i, sheetId: id, name: sheet?.name ?? id, hidden: sheet?.hidden ? 1 : 0 });
+  // tabColor + dims are carried on the manifest so unhydrated SHELL tabs render
+  // with the right colour and size before their data is fetched (buildShellWorkbook).
+  manifest.push({
+    order: i, sheetId: id, name: sheet?.name ?? id, hidden: sheet?.hidden ? 1 : 0,
+    tabColor: sheet?.tabColor || undefined,
+    rowCount: sheet?.rowCount ?? undefined,
+    columnCount: sheet?.columnCount ?? undefined,
+  });
 });
 
 fs.writeFileSync(path.join(OUT, "poc-manifest.json"), JSON.stringify(manifest, null, 2));

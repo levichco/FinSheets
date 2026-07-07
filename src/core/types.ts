@@ -101,6 +101,20 @@ export interface LevichSheetProps {
   onColumnWidthsChange?: (widths: Record<number, number>) => void;
   /** Toolbar style. Defaults to "simple". */
   toolbar?: "simple" | "full" | "none";
+  /**
+   * Show Univer's native footer sheet-tab bar (and the injected tab-menu caret).
+   * Defaults to `true`. Set `false` when the host renders its own tab bar
+   * (`<SheetTabBar>`) — e.g. the lazy shell-workbook product, where the custom
+   * bar is the sole controller of the active sheet.
+   */
+  sheetBar?: boolean;
+  /**
+   * Read-only preview mode. When true, the grid renders but rejects cell edits
+   * (used to preview a Version-History snapshot without accepting typing). Edits
+   * are vetoed at the engine's edit-start/end events; best-effort permission API
+   * is also applied. Structural chrome (tabs/menus) is the host's concern.
+   */
+  readOnly?: boolean;
   /** Optional className for the host container. */
   className?: string;
   /** Stable row-key resolver for comment persistence. Defaults to row index. */
@@ -135,6 +149,18 @@ export interface LevichSheetProps {
   onMakeCopy?: () => void;
   /** File ▸ Rename — host hook for the document title. Defaults to renaming the active sheet. */
   onRename?: (name: string) => void;
+  /**
+   * View ▸ Hide sheet — host hook. When the host owns sheet structure (e.g. the
+   * manifest-driven shell-workbook product), provide this so the menu hides the
+   * ACTIVE sheet via the host instead of Univer's Facade. Defaults to the Facade.
+   */
+  onHideActiveSheet?: () => void;
+  /** View ▸ Show sheets ▸ — host hook to unhide + open a sheet by id. Pairs with `hiddenSheetList`. */
+  onShowSheet?: (sheetId: string) => void;
+  /** The document's hidden sheets, for the View ▸ Show sheets submenu (host-driven). */
+  hiddenSheetList?: Array<{ sheetId: string; name: string }>;
+  /** Whether the active sheet can be hidden (host-driven; false disables View ▸ Hide sheet). */
+  canHideActiveSheet?: boolean;
   /**
    * Sheet tab ▸ Copy to ▸ Existing spreadsheet. Cross-spreadsheet copy is owned
    * by the host/backend (it must choose a target document). Receives the sheet
