@@ -14,6 +14,7 @@ import { LevichMenuBar } from "./menu/levich-menu-bar";
 import { LevichToolbar } from "./toolbar/levich-toolbar";
 import type { Disposer } from "./core/facade";
 import { exportToXlsx, type SnapshotSource } from "./core/export-xlsx";
+import { ensureFontsForSnapshot } from "./theme/google-fonts";
 import { attachColumnWidths } from "./features/column-widths";
 import { attachComments } from "./features/comments";
 import { attachFilterPanel } from "./features/filter-panel";
@@ -29,7 +30,7 @@ function ribbonFor(toolbar: LevichSheetProps["toolbar"]): "collapsed" | "simple"
 }
 
 export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(function LevichSheet(props, ref) {
-  const { data, columns, snapshot, freeze, pivot, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, className, onCellEdit, onColumnWidthsChange, onReady, onImport, onNew, onMakeCopy, onRename, onCopyToExisting } = props;
+  const { data, columns, snapshot, freeze, pivot, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, sheetBar, readOnly, className, onCellEdit, onColumnWidthsChange, onReady, onImport, onSave, onNew, onMakeCopy, onRename, onCopyToExisting, onHideActiveSheet, onShowSheet, hiddenSheetList, canHideActiveSheet } = props;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const univerRef = useRef<{ dispose: () => void } | null>(null);
@@ -85,14 +86,48 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
       workbookData,
       ribbonType: ribbonFor(toolbar),
       univerToolbar: false, // hide Univer's toolbar; we render the Levich toolbar
+      // sheetBar:false → hide Univer's native footer tabs; the host renders its own
+      // <SheetTabBar> (sole controller of the active sheet in shell-workbook mode).
+      footer: sheetBar === false ? false : undefined,
     });
     univerRef.current = univer;
     apiRef.current = univerAPI;
     setToolbarApi(univerAPI);
     onReady?.(univerAPI);
 
+    // Load any Google Fonts the snapshot uses (Univer paints on a canvas, so a
+    // font must be in the FontFaceSet or text falls back to serif). Once loaded,
+    // recompute the render skeleton so text re-measures in the right typeface.
+    if (snapshot) {
+      void ensureFontsForSnapshot(snapshot).then(() => {
+        try { (univerAPI.getActiveWorkbook()?.getActiveSheet() as unknown as { refreshCanvas?: () => void })?.refreshCanvas?.(); }
+        catch { try { window.dispatchEvent(new Event("resize")); } catch { /* */ } }
+      });
+    }
+
     // --- Configurable behaviors (all opt-in, driven by the column config) ----
     const disposers: Disposer[] = [];
+
+    // Read-only preview: veto every edit at start AND end (paste/fill paths),
+    // and try the workbook permission API as a belt-and-suspenders. Formatting/
+    // navigation stay allowed — only value entry is blocked. Best-effort.
+    if (readOnly) {
+      try {
+        const f = univerAPI as unknown as {
+          Event?: Record<string, string>;
+          addEvent?: (event: string, cb: (p: { cancel?: boolean }) => void) => Disposer;
+        };
+        const veto = (p: { cancel?: boolean }) => { p.cancel = true; };
+        const startEvent = f.Event?.BeforeSheetEditStart;
+        const endEvent = f.Event?.BeforeSheetEditEnd;
+        if (startEvent && f.addEvent) disposers.push(f.addEvent(startEvent, veto));
+        if (endEvent && f.addEvent) disposers.push(f.addEvent(endEvent, veto));
+      } catch { /* event surface differs — veto is best-effort */ }
+      try {
+        (univerAPI.getActiveWorkbook() as unknown as { setEditable?: (v: boolean) => void })?.setEditable?.(false);
+      } catch { /* permission API differs — best-effort */ }
+    }
+
     if (!pivot && !snapshot) {
       const lockedColumns = columns.flatMap((c, i) => (c.locked ? [i] : []));
       const editableColumn = columns.findIndex((c) => c.editable);
@@ -154,7 +189,7 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
     };
     // The component is remounted per dataset via `key` upstream, so this is
     // effectively mount-once; deps cover the rebuild-on-change case.
-  }, [data, columns, snapshot, freeze, pivot, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, onCellEdit, onColumnWidthsChange]);
+  }, [data, columns, snapshot, freeze, pivot, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, readOnly, onCellEdit, onColumnWidthsChange]);
 
   useImperativeHandle(
     ref,
@@ -171,12 +206,14 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
 
   return (
     <div className={className ?? "levich-sheet"} style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", minHeight: 0 }}>
-      <LevichMenuBar api={toolbarApi} onOpenFind={() => setFindOpen(true)} onImport={onImport} onNew={onNew} onMakeCopy={onMakeCopy} onRename={onRename} />
+      <LevichMenuBar api={toolbarApi} onOpenFind={() => setFindOpen(true)} onImport={onImport} onSave={onSave} onNew={onNew} onMakeCopy={onMakeCopy} onRename={onRename} onHideActiveSheet={onHideActiveSheet} onShowSheet={onShowSheet} hiddenSheetList={hiddenSheetList} canHideActiveSheet={canHideActiveSheet} />
       <LevichToolbar api={toolbarApi} onOpenFind={() => setFindOpen(true)} />
       <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
         <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
         <FindReplaceModal api={toolbarApi} open={findOpen} onClose={() => setFindOpen(false)} />
-        <SheetTabMenu api={toolbarApi} onCopyToExisting={onCopyToExisting} />
+        {/* Injected-caret tab menu only for the NATIVE footer. When the host hides
+            the native bar (sheetBar:false) it renders its own <SheetTabBar>. */}
+        {sheetBar !== false && <SheetTabMenu api={toolbarApi} onCopyToExisting={onCopyToExisting} />}
       </div>
     </div>
   );

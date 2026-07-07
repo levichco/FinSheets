@@ -39,6 +39,7 @@ import "@univerjs/preset-sheets-note/lib/index.css";
 import "@univerjs/preset-sheets-hyper-link/lib/index.css";
 import "@univerjs/preset-sheets-table/lib/index.css";
 import "@univerjs/preset-sheets-drawing/lib/index.css";
+import "../theme/office-fonts.css"; // alias Calibri→Carlito etc. (Excel-accurate fonts)
 import "../theme/levich-theme.css";
 import { brandContainer } from "../theme/branding-plugin";
 import { levichTheme } from "../theme/levich-theme";

@@ -1,0 +1,47 @@
+/**
+ * Office-font aliasing for accurate Excel/Sheets rendering.
+ *
+ * Excel workbooks use fonts (Calibri, Cambria, …) that browsers don't ship, so
+ * Univer's canvas falls back to a SERIF default — text that should be sans-serif
+ * renders as Times. We alias each Office font to its METRIC-COMPATIBLE open
+ * substitute (the Croscore / Chrome fonts LibreOffice uses), so:
+ *   - if the user's machine HAS the real Office font (Windows/Mac + Office) → use it;
+ *   - otherwise → load the metric-compatible substitute (same widths, same look).
+ *
+ * Calibri→Carlito · Cambria→Caladea · Arial→Arimo · Times New Roman→Tinos ·
+ * Courier New→Cousine. Fonts served from the Fontsource CDN (jsDelivr).
+ */
+
+/* ---- Calibri → Carlito ---- */
+@font-face { font-family: "Calibri"; font-weight: 400; font-style: normal;
+  src: local("Calibri"), url("https://cdn.jsdelivr.net/fontsource/fonts/carlito@latest/latin-400-normal.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Calibri"; font-weight: 700; font-style: normal;
+  src: local("Calibri"), url("https://cdn.jsdelivr.net/fontsource/fonts/carlito@latest/latin-700-normal.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Calibri"; font-weight: 400; font-style: italic;
+  src: local("Calibri"), url("https://cdn.jsdelivr.net/fontsource/fonts/carlito@latest/latin-400-italic.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Calibri"; font-weight: 700; font-style: italic;
+  src: local("Calibri"), url("https://cdn.jsdelivr.net/fontsource/fonts/carlito@latest/latin-700-italic.woff2") format("woff2"); font-display: swap; }
+
+/* ---- Cambria → Caladea (serif) ---- */
+@font-face { font-family: "Cambria"; font-weight: 400; font-style: normal;
+  src: local("Cambria"), url("https://cdn.jsdelivr.net/fontsource/fonts/caladea@latest/latin-400-normal.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Cambria"; font-weight: 700; font-style: normal;
+  src: local("Cambria"), url("https://cdn.jsdelivr.net/fontsource/fonts/caladea@latest/latin-700-normal.woff2") format("woff2"); font-display: swap; }
+
+/* ---- Arial → Arimo ---- */
+@font-face { font-family: "Arial"; font-weight: 400; font-style: normal;
+  src: local("Arial"), url("https://cdn.jsdelivr.net/fontsource/fonts/arimo@latest/latin-400-normal.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Arial"; font-weight: 700; font-style: normal;
+  src: local("Arial"), url("https://cdn.jsdelivr.net/fontsource/fonts/arimo@latest/latin-700-normal.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Arial"; font-weight: 400; font-style: italic;
+  src: local("Arial"), url("https://cdn.jsdelivr.net/fontsource/fonts/arimo@latest/latin-400-italic.woff2") format("woff2"); font-display: swap; }
+
+/* ---- Times New Roman → Tinos (serif) ---- */
+@font-face { font-family: "Times New Roman"; font-weight: 400; font-style: normal;
+  src: local("Times New Roman"), url("https://cdn.jsdelivr.net/fontsource/fonts/tinos@latest/latin-400-normal.woff2") format("woff2"); font-display: swap; }
+@font-face { font-family: "Times New Roman"; font-weight: 700; font-style: normal;
+  src: local("Times New Roman"), url("https://cdn.jsdelivr.net/fontsource/fonts/tinos@latest/latin-700-normal.woff2") format("woff2"); font-display: swap; }
+
+/* ---- Courier New → Cousine (mono) ---- */
+@font-face { font-family: "Courier New"; font-weight: 400; font-style: normal;
+  src: local("Courier New"), url("https://cdn.jsdelivr.net/fontsource/fonts/cousine@latest/latin-400-normal.woff2") format("woff2"); font-display: swap; }
