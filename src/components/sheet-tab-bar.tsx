@@ -15,7 +15,7 @@
  */
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronLeft, ChevronRight, Copy01, Edit01, EyeOff, Menu01, Palette, Plus, SearchMd, Trash01, ZoomIn, ZoomOut } from "@untitledui/icons";
+import { ChevronDown, ChevronLeft, ChevronRight, Copy01, Edit01, EyeOff, Grid01, Menu01, Palette, Plus, SearchMd, Trash01, ZoomIn, ZoomOut } from "@untitledui/icons";
 import { RenameModal } from "./rename-modal";
 import { ConfirmModal } from "./modal";
 import { ColorPanel } from "./color-panel";
@@ -48,11 +48,25 @@ export interface SheetTabBarProps {
   zoom?: number;
   /** Zoom change handler (receives a clamped percentage 50–200). */
   onZoom?: (percent: number) => void;
+  /** Toggle worksheet gridlines. When provided, a gridlines button shows next to zoom. */
+  onToggleGridlines?: () => void;
+  /** Current gridlines visibility (drives the toggle button's on/off look). */
+  gridlinesVisible?: boolean;
 }
 
 const ZOOM_MIN = 50;
 const ZOOM_MAX = 200;
 const clampZoom = (p: number) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(p)));
+
+// FinOpz accent (brand yellow) — the active-tab indicator over the black-and-white base.
+const YELLOW = "#EFC71D";
+/** Readable text colour (black/white) for a filled tab, from the fill's luminance. */
+function textOn(hex?: string): string {
+  const h = (hex ?? "").replace("#", "");
+  if (h.length < 6) return "#111827";
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6 ? "#111827" : "#ffffff";
+}
 
 // Anchor for the all-sheets popover (off React state — avoids a re-render loop).
 const allAnchor = { x: 8, y: 0 };
@@ -94,7 +108,7 @@ function Row({ label, icon, onClick, danger, disabled, children }: { label: stri
 }
 
 export function SheetTabBar(props: SheetTabBarProps) {
-  const { sheets, activeSheetId, onSelect, onAdd, onRename, onDuplicate, onDelete, onChangeColor, onHide, onUnhide, onMove, onCopyToNew, onCopyToExisting, zoom, onZoom } = props;
+  const { sheets, activeSheetId, onSelect, onAdd, onRename, onDuplicate, onDelete, onChangeColor, onHide, onUnhide, onMove, onCopyToNew, onCopyToExisting, zoom, onZoom, onToggleGridlines, gridlinesVisible } = props;
   const zoomPct = zoom ?? 100;
   const [menu, setMenu] = useState<{ x: number; y: number; sheetId: string } | null>(null);
   const [sub, setSub] = useState<null | "copy" | "color" | "unhide">(null);
@@ -172,6 +186,12 @@ export function SheetTabBar(props: SheetTabBarProps) {
         <div ref={scrollRef} style={{ display: "flex", alignItems: "stretch", gap: 2, overflowX: "auto", scrollbarWidth: "none", flex: 1 }}>
           {visible.map((s) => {
             const active = s.sheetId === activeSheetId;
+            // Excel-style: a coloured sheet fills the ENTIRE tab with its colour. Base is
+            // black & white — active tab is a white card, inactive is transparent.
+            const colored = !!s.tabColor;
+            const bg = colored ? s.tabColor! : active ? "#ffffff" : "transparent";
+            const fg = colored ? textOn(s.tabColor) : active ? "#111827" : "#3c4043";
+            const chevron = colored ? fg : active ? "#5f6368" : "#98a2b3";
             return (
               <div
                 key={s.sheetId}
@@ -185,8 +205,8 @@ export function SheetTabBar(props: SheetTabBarProps) {
                 style={{
                   display: "flex", alignItems: "center", gap: 4, padding: "0 8px 0 12px", cursor: "pointer", position: "relative",
                   maxWidth: 220, borderTopLeftRadius: 8, borderTopRightRadius: 8,
-                  background: active ? "#fff" : "transparent",
-                  color: active ? "#111827" : "#3c4043",
+                  background: bg,
+                  color: fg,
                   fontSize: 13, fontWeight: active ? 600 : 500,
                   boxShadow: active ? "1px 0 0 #e4e7ec, -1px 0 0 #e4e7ec" : "none",
                 }}
@@ -197,12 +217,12 @@ export function SheetTabBar(props: SheetTabBarProps) {
                   role="button" aria-label="Sheet options" title="Sheet options"
                   // Opens THIS tab's menu without switching to it (stay on the current sheet).
                   onClick={(e) => { e.stopPropagation(); openMenuForTab(e.currentTarget.parentElement as HTMLElement, s.sheetId); }}
-                  style={{ display: "inline-flex", alignItems: "center", padding: "3px 1px", color: active ? "#5f6368" : "#98a2b3", borderRadius: 4 }}
+                  style={{ display: "inline-flex", alignItems: "center", padding: "3px 1px", color: chevron, borderRadius: 4 }}
                 >
                   <ChevronDown size={14} />
                 </span>
-                {/* colour bar at the TOP of the tab (absolutely positioned so it isn't clipped) */}
-                {s.tabColor && <span aria-hidden style={{ position: "absolute", left: 0, right: 0, top: 0, height: 3, background: s.tabColor, borderRadius: "0 0 3px 3px" }} />}
+                {/* Active tab indicator — a FinOpz-yellow bar along the bottom of the tab. */}
+                {active && <span aria-hidden style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 3, background: YELLOW, borderRadius: "3px 3px 0 0" }} />}
               </div>
             );
           })}
@@ -212,6 +232,23 @@ export function SheetTabBar(props: SheetTabBarProps) {
           <button type="button" title="Previous tab" style={iconBtn} onClick={() => scrollOneTab(-1)}><ChevronLeft size={18} /></button>
           <button type="button" title="Next tab" style={iconBtn} onClick={() => scrollOneTab(1)}><ChevronRight size={18} /></button>
         </div>
+
+        {/* Gridlines on/off — next to zoom. */}
+        {onToggleGridlines && (
+          <div style={{ display: "flex", alignItems: "center", paddingLeft: 8, marginLeft: 4, borderLeft: "1px solid #e4e7ec" }}>
+            <button
+              type="button"
+              title={gridlinesVisible === false ? "Show gridlines" : "Hide gridlines"}
+              aria-pressed={gridlinesVisible !== false}
+              style={{ ...iconBtn, width: 30, color: gridlinesVisible === false ? "#98a2b3" : "#344054" }}
+              onClick={onToggleGridlines}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#eceef1")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <Grid01 size={16} />
+            </button>
+          </div>
+        )}
 
         {/* Zoom control (bottom-right, Google/Excel style) */}
         {onZoom && (
