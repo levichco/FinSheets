@@ -60,6 +60,34 @@ export default function App() {
 
 See `dist/index.d.ts` for the full typed surface.
 
+### Backend-owned import
+
+Let a backend own **File → Import** (upload + convert server-side, no in-browser
+freeze on large workbooks) with the `onImportFile` hook — it fires with the raw
+picked `File` **before** any client-side parsing. Return `true` to skip the
+package's built-in parse:
+
+```tsx
+<LevichSheet
+  data={data}
+  columns={columns}
+  onImportFile={async (file) => {
+    await uploadToBackend(file); // POST to your service, which converts + stores
+    return true;                 // package skips its own parse
+  }}
+/>
+```
+
+### Headless (Node) converter
+
+The **`@levichco/finsheets/node`** subpath is a Node-safe entry (no React / CSS /
+Univer-UI) so a backend can reuse the same `.xlsx` converter headlessly:
+
+```ts
+import { parseXlsxToSnapshot } from "@levichco/finsheets/node";
+const snapshot = await parseXlsxToSnapshot(fileLike); // { name, arrayBuffer() }
+```
+
 ## Roadmap / design docs
 
 - [`docs/VERSION-HISTORY.md`](docs/VERSION-HISTORY.md) — Google-Docs-style version

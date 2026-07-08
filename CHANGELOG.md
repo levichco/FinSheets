@@ -6,6 +6,17 @@ follows semantic versioning. Each release records the **exact Univer engine
 version** it bundles, so a given package version is reproducible and any release
 can be rolled back to (see constitution Principle VIII).
 
+## [0.1.6] - 2026-07-08
+
+### Added
+- **`onImportFile`** prop on `<LevichSheet>` — `(file: File) => boolean | Promise<boolean>`,
+  fired with the picked `File` **before** any client-side parsing. Return `true` and the
+  package skips its built-in parse, letting a backend own File → Import (upload + convert
+  server-side, no in-browser freeze on large workbooks). Mirrors the existing `onImport` hook.
+
+### Engine
+- Univer (`@univerjs/presets`, `@univerjs/preset-sheets-core`): **0.25.0** (exact pin)
+
 ## [0.1.5] - 2026-07-07
 
 Headless-safe converter entry so the backend can reuse the FE converter.
