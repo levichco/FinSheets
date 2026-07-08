@@ -60,12 +60,22 @@ const clampZoom = (p: number) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.roun
 
 // FinOpz accent (brand yellow) — the active-tab indicator over the black-and-white base.
 const YELLOW = "#EFC71D";
-/** Readable text colour (black/white) for a filled tab, from the fill's luminance. */
+/**
+ * Readable text colour for a filled tab: dark text on light fills, light text on
+ * dark fills — chosen by whichever of black/white has the higher WCAG contrast
+ * ratio against the fill (gamma-correct relative luminance).
+ */
 function textOn(hex?: string): string {
   const h = (hex ?? "").replace("#", "");
   if (h.length < 6) return "#111827";
-  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6 ? "#111827" : "#ffffff";
+  const lin = (i: number) => {
+    const c = parseInt(h.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const L = 0.2126 * lin(0) + 0.7152 * lin(2) + 0.0722 * lin(4);
+  const contrastBlack = (L + 0.05) / 0.05; // contrast of black text on this fill
+  const contrastWhite = 1.05 / (L + 0.05); // contrast of white text on this fill
+  return contrastBlack >= contrastWhite ? "#111827" : "#ffffff";
 }
 
 // Anchor for the all-sheets popover (off React state — avoids a re-render loop).
