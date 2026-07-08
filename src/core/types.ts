@@ -152,6 +152,12 @@ export interface LevichSheetProps {
    * Either way, the browser's own "Save page" dialog is always suppressed.
    */
   onSave?: (snapshot: WorkbookData) => boolean | void;
+  /**
+   * File ▸ Download (.xlsx) — host hook. When provided, the menu bar delegates the
+   * download to the host (e.g. to export the full multi-sheet workbook under the
+   * document's own title). Omit to use the built-in "levich-sheet.xlsx" fallback.
+   */
+  onDownload?: () => void;
   /** File ▸ New — host hook for a fresh document. Defaults to clearing the sheet. */
   onNew?: () => void;
   /** File ▸ Make a copy — host hook. Defaults to downloading a `.xlsx` copy. */

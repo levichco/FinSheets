@@ -30,7 +30,7 @@ function ribbonFor(toolbar: LevichSheetProps["toolbar"]): "collapsed" | "simple"
 }
 
 export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(function LevichSheet(props, ref) {
-  const { data, columns, snapshot, freeze, pivot, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, sheetBar, readOnly, className, onCellEdit, onColumnWidthsChange, onReady, onImport, onImportFile, onSave, onNew, onMakeCopy, onRename, onCopyToExisting, onHideActiveSheet, onShowSheet, hiddenSheetList, canHideActiveSheet } = props;
+  const { data, columns, snapshot, freeze, pivot, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, sheetBar, readOnly, className, onCellEdit, onColumnWidthsChange, onReady, onImport, onImportFile, onSave, onDownload, onNew, onMakeCopy, onRename, onCopyToExisting, onHideActiveSheet, onShowSheet, hiddenSheetList, canHideActiveSheet } = props;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const univerRef = useRef<{ dispose: () => void } | null>(null);
@@ -206,7 +206,7 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
 
   return (
     <div className={className ?? "levich-sheet"} style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", minHeight: 0 }}>
-      <LevichMenuBar api={toolbarApi} onOpenFind={() => setFindOpen(true)} onImport={onImport} onImportFile={onImportFile} onSave={onSave} onNew={onNew} onMakeCopy={onMakeCopy} onRename={onRename} onHideActiveSheet={onHideActiveSheet} onShowSheet={onShowSheet} hiddenSheetList={hiddenSheetList} canHideActiveSheet={canHideActiveSheet} />
+      <LevichMenuBar api={toolbarApi} onOpenFind={() => setFindOpen(true)} onImport={onImport} onImportFile={onImportFile} onSave={onSave} onDownload={onDownload} onNew={onNew} onMakeCopy={onMakeCopy} onRename={onRename} onHideActiveSheet={onHideActiveSheet} onShowSheet={onShowSheet} hiddenSheetList={hiddenSheetList} canHideActiveSheet={canHideActiveSheet} />
       <LevichToolbar api={toolbarApi} onOpenFind={() => setFindOpen(true)} />
       <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
         <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
