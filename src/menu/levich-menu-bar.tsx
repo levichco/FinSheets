@@ -204,6 +204,12 @@ export interface LevichMenuBarProps {
    * replace current sheet, append, at-cell) can be left to the sheet.
    */
   onImport?: (grid: (string | number)[][], location: ImportLocation) => boolean | void;
+  /**
+   * File ▸ Import RAW-FILE hook — fired with the picked File BEFORE parsing.
+   * Return `true` (sync/async) to let the HOST own the whole import (e.g. upload
+   * to the backend) and skip the built-in client-side parse. Falsy → fall through.
+   */
+  onImportFile?: (file: File) => boolean | Promise<boolean>;
   /** File ▸ Make a copy. Defaults to downloading a copy as .xlsx. */
   onMakeCopy?: () => void;
   /** File ▸ Rename. Defaults to renaming the active sheet (prompt). */
@@ -218,7 +224,7 @@ export interface LevichMenuBarProps {
   canHideActiveSheet?: boolean;
 }
 
-export function LevichMenuBar({ api, onDownload, onOpenFind, onSave, onNew, onImport, onMakeCopy, onRename, onHideActiveSheet, onShowSheet, hiddenSheetList, canHideActiveSheet }: LevichMenuBarProps) {
+export function LevichMenuBar({ api, onDownload, onOpenFind, onSave, onNew, onImport, onImportFile, onMakeCopy, onRename, onHideActiveSheet, onShowSheet, hiddenSheetList, canHideActiveSheet }: LevichMenuBarProps) {
   const [openMenu, setOpenMenu] = useState<number | null>(null);
   // Transient "Saved" toast (File ▸ Save / ⌘S).
   const [saved, setSaved] = useState(false);
@@ -394,6 +400,9 @@ export function LevichMenuBar({ api, onDownload, onOpenFind, onSave, onNew, onIm
   const importFile = async () => {
     const file = await pickFile(".xlsx,.csv");
     if (!file) return;
+    // Raw-file host hook first: if the backend owns the import (uploads + converts
+    // server-side), it returns true and we skip the heavy in-browser parse entirely.
+    if (onImportFile && (await onImportFile(file))) return;
     const grid = await parseFileToGrid(file).catch(() => null);
     if (!grid || !grid.length) return;
     importFileRef.current = file;

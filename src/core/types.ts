@@ -136,6 +136,15 @@ export interface LevichSheetProps {
    */
   onImport?: (grid: (string | number)[][], location: ImportLocation) => boolean | void;
   /**
+   * File ▸ Import — RAW-FILE host hook, fired with the picked File BEFORE any
+   * client-side parsing. Lets a backend own the whole import (e.g. upload the
+   * bytes to the server, convert there, create a document) — avoiding the
+   * heavy in-browser parse that freezes on large workbooks. Return `true`
+   * (sync or async) to signal "handled" and STOP the built-in client import;
+   * return falsy to fall through to the local `onImport(grid, location)` path.
+   */
+  onImportFile?: (file: File) => boolean | Promise<boolean>;
+  /**
    * File ▸ Save / ⌘S (Ctrl+S). Receives the LIVE Univer workbook snapshot so
    * the host can persist it to its backend. Return `true` if handled; return
    * falsy (or omit) to use the built-in fallback, which persists the snapshot
