@@ -1074,17 +1074,10 @@ export function LevichToolbar({ api, onOpenFind }: LevichToolbarProps) {
           api?.executeCommand("doc.operation.move-cursor", { direction: "right" });
         } catch { /* editor selection is best-effort */ }
       }
-      // Always set the CELL (range) font too, so the committed value and the
-      // not-editing case are correct — font family is a whole-cell property.
+      // Set the CELL (range) font — this applies to the SELECTED cell(s) only, which is what the
+      // user expects. (We intentionally do NOT change the sheet's default style here; doing so
+      // re-fonted every default-font cell in the whole sheet.)
       api?.executeCommand("sheet.command.set-range-font-family", { value: f });
-      // Make it the sheet's DEFAULT font so empty cells' editors inherit it — even
-      // the FIRST typed character is correct (no async pre-arm race). Cells with an
-      // explicit font keep theirs; only default-font cells follow the new default.
-      try {
-        const ws = api?.getActiveWorkbook?.()?.getActiveSheet?.() as unknown as { getDefaultStyle?: () => unknown; setDefaultStyle?: (s: unknown) => void };
-        const cur = ws?.getDefaultStyle?.();
-        ws?.setDefaultStyle?.({ ...(cur && typeof cur === "object" ? cur : {}), ff: f });
-      } catch { /* default-style API is best-effort */ }
       // Recompute the render skeleton so text RE-MEASURES with the now-loaded
       // font (a plain resize doesn't invalidate Univer's cached glyph metrics).
       try { (api?.getActiveWorkbook?.()?.getActiveSheet?.() as unknown as { refreshCanvas?: () => void })?.refreshCanvas?.(); }
