@@ -1020,7 +1020,22 @@ export function LevichToolbar({ api, onOpenFind }: LevichToolbarProps) {
   // cell). Univer tracks underline & strikethrough independently. We flip our own
   // lit state optimistically; the selection listener resyncs it when you move.
   const fireMark = (rangeCmd: string, inlineCmd: string, key: "bold" | "italic" | "underline" | "strike") => {
-    apiOf()?.executeCommand(editingRef.current ? inlineCmd : rangeCmd);
+    const api = apiOf();
+    if (editingRef.current) {
+      // Editing: style the WHOLE in-cell text (select-all → inline format → collapse the caret) so the
+      // characters already typed change immediately — Univer's inline command alone only affects the
+      // current selection/caret, so B/I/U/S looked like it "did nothing" while a cell was being edited.
+      try {
+        api?.executeCommand("doc.command.select-all");
+        api?.executeCommand(inlineCmd);
+        api?.executeCommand("doc.operation.move-cursor", { direction: "right" });
+      } catch {
+        /* in-cell editor selection is best-effort */
+      }
+    }
+    // Always set the CELL (range) format too, so the committed cell keeps the style and text typed
+    // next inherits it (also the correct path when not editing).
+    api?.executeCommand(rangeCmd);
     setActive((a) => ({ ...a, [key]: !a[key] }));
   };
   const toggleBold = () => fireMark("sheet.command.set-range-bold", "doc.command.set-inline-format-bold", "bold");
