@@ -9,6 +9,7 @@
  * Free-tier only: `UniverSheetsCorePreset` is Apache-2.0; no Pro/exchange.
  */
 import { UniverSheetsCorePreset } from "@univerjs/preset-sheets-core";
+import { CalculationMode } from "@univerjs/sheets-formula";
 import UniverPresetSheetsCoreEnUS from "@univerjs/preset-sheets-core/locales/en-US";
 import { UniverSheetsFindReplacePreset } from "@univerjs/preset-sheets-find-replace";
 import SheetsFindReplaceEnUS from "@univerjs/preset-sheets-find-replace/locales/en-US";
@@ -102,6 +103,13 @@ export function createSheet({
     // Our date/id columns are intentionally text — suppress Univer's
     // "number stored as text" green-triangle marks + alert popup.
     sheets: { disableForceStringAlert: true, disableForceStringMark: true },
+    // Trust the cached values the converter carried over from Excel; do NOT
+    // recompute every formula up front. Univer's initial recalc turns functions
+    // it doesn't support (and formulas pointing at the workbook's own #REF! cells)
+    // into #NAME?/#VALUE!, clobbering the correct numbers Excel/Google Sheets show.
+    // Editing still recomputes dependents at runtime — this only suppresses the
+    // destructive on-load recalc so an imported sheet renders exactly as authored.
+    formula: { initialFormulaComputing: CalculationMode.NO_CALCULATION },
   };
   if (footer === false) presetConfig.footer = false; // omit → Univer default (shown)
 
