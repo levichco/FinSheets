@@ -9,6 +9,7 @@
  * Free-tier only: `UniverSheetsCorePreset` is Apache-2.0; no Pro/exchange.
  */
 import { UniverSheetsCorePreset } from "@univerjs/preset-sheets-core";
+import { IRenderManagerService } from "@univerjs/engine-render";
 import { CalculationMode } from "@univerjs/sheets-formula";
 import UniverPresetSheetsCoreEnUS from "@univerjs/preset-sheets-core/locales/en-US";
 import { UniverSheetsFindReplacePreset } from "@univerjs/preset-sheets-find-replace";
@@ -156,4 +157,34 @@ export function createSheet({
   });
   univerAPI.createWorkbook(workbookData);
   return { univer, univerAPI };
+}
+
+/**
+ * Force Univer to re-measure its canvas against the container's CURRENT size, right now.
+ *
+ * Univer's engine sizes its canvas from the container box at `setContainer()` time and
+ * afterwards recovers via its own `ResizeObserver` — but that observer defers the actual
+ * `engine.resize()` through `requestIdleCallback`. In a busy app the idle callback can be
+ * starved indefinitely, so when the grid is built while its container is momentarily 0×0
+ * (mounted in a still-hidden / not-yet-laid-out subtree during a route/overlay/tab
+ * transition, or a late flex height) the canvas stays stuck at 0×0 = a blank grid, even
+ * after the container settles to its real size.
+ *
+ * Calling `engine.resize()` directly bypasses that starved idle callback: it re-reads the
+ * container box and, if the size differs from what the engine last saw (e.g. 0×0 → N×M),
+ * resizes the canvas and repaints. It early-returns when the size is unchanged, so calling
+ * it repeatedly / on every observed resize is cheap and safe.
+ */
+export function forceCanvasResize(univerAPI: UniverAPI): void {
+  try {
+    const api = univerAPI as unknown as { _injector?: { get: (t: unknown) => unknown } };
+    const unitId = univerAPI.getActiveWorkbook?.()?.getId?.();
+    if (!api._injector || !unitId) return;
+    const rms = api._injector.get(IRenderManagerService) as
+      | { getRenderById?: (id: string) => { engine?: { resize?: () => void } } | undefined }
+      | undefined;
+    rms?.getRenderById?.(unitId)?.engine?.resize?.();
+  } catch {
+    /* best-effort: never let a resize nudge throw into the caller */
+  }
 }

@@ -8,7 +8,7 @@
  */
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { buildWorkbook } from "./core/build-workbook";
-import { createSheet, type UniverAPI } from "./core/create-sheet";
+import { createSheet, forceCanvasResize, type UniverAPI } from "./core/create-sheet";
 import { FindReplaceModal } from "./components/find-replace-modal";
 import { LevichMenuBar } from "./menu/levich-menu-bar";
 import { LevichToolbar } from "./toolbar/levich-toolbar";
@@ -95,14 +95,28 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
     setToolbarApi(univerAPI);
     onReady?.(univerAPI);
 
+    // Blank-grid fix: keep Univer's canvas sized to its container by re-measuring
+    // DIRECTLY (forceCanvasResize → engine.resize()), bypassing Univer's own
+    // ResizeObserver → requestIdleCallback recovery which can be starved in a busy
+    // app and leave the canvas stuck at the 0×0 it measured at build time. Force a
+    // re-measure now, across the next few frames (covers the box settling one frame
+    // late), and on every genuine container size change. engine.resize() early-returns
+    // on unchanged size, so this is cheap.
+    let rafId = 0;
+    const nudge = () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => forceCanvasResize(univerAPI));
+    };
+    const sizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(nudge) : null;
+    sizeObserver?.observe(container);
+    nudge();
+    const nudgeTimers = [50, 160, 400, 800].map((ms) => setTimeout(nudge, ms));
+
     // Load any Google Fonts the snapshot uses (Univer paints on a canvas, so a
     // font must be in the FontFaceSet or text falls back to serif). Once loaded,
-    // recompute the render skeleton so text re-measures in the right typeface.
+    // re-measure so text re-lays-out in the right typeface at the correct size.
     if (snapshot) {
-      void ensureFontsForSnapshot(snapshot).then(() => {
-        try { (univerAPI.getActiveWorkbook()?.getActiveSheet() as unknown as { refreshCanvas?: () => void })?.refreshCanvas?.(); }
-        catch { try { window.dispatchEvent(new Event("resize")); } catch { /* */ } }
-      });
+      void ensureFontsForSnapshot(snapshot).then(() => forceCanvasResize(univerAPI));
     }
 
     // --- Configurable behaviors (all opt-in, driven by the column config) ----
@@ -171,6 +185,9 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
     // resource, so Univer renders them at load — no post-load work needed here.
 
     return () => {
+      sizeObserver?.disconnect();
+      cancelAnimationFrame(rafId);
+      nudgeTimers.forEach(clearTimeout);
       disposers.forEach((d) => {
         try {
           d.dispose();
