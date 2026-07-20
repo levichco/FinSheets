@@ -175,15 +175,27 @@ export function createSheet({
  * resizes the canvas and repaints. It early-returns when the size is unchanged, so calling
  * it repeatedly / on every observed resize is cheap and safe.
  */
+let warnedNoEngine = false;
 export function forceCanvasResize(univerAPI: UniverAPI): void {
   try {
     const api = univerAPI as unknown as { _injector?: { get: (t: unknown) => unknown } };
     const unitId = univerAPI.getActiveWorkbook?.()?.getId?.();
-    if (!api._injector || !unitId) return;
+    if (!api._injector || !unitId) return; // no workbook yet — legitimate, stay quiet
     const rms = api._injector.get(IRenderManagerService) as
       | { getRenderById?: (id: string) => { engine?: { resize?: () => void } } | undefined }
       | undefined;
-    rms?.getRenderById?.(unitId)?.engine?.resize?.();
+    const engine = rms?.getRenderById?.(unitId)?.engine;
+    if (typeof engine?.resize !== "function") {
+      // We had a workbook + injector but couldn't reach the render engine: a Univer
+      // internals rename would otherwise degrade SILENTLY to a permanently blank
+      // canvas. Warn once so the regression is visible instead of a mystery blank.
+      if (!warnedNoEngine) {
+        warnedNoEngine = true;
+        console.warn("[finsheets] forceCanvasResize: could not reach Univer's render engine.resize — the grid may not recover from a 0×0 mount. Univer's internal API may have changed.");
+      }
+      return;
+    }
+    engine.resize();
   } catch {
     /* best-effort: never let a resize nudge throw into the caller */
   }

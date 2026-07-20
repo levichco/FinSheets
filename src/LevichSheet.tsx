@@ -114,9 +114,17 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
 
     // Load any Google Fonts the snapshot uses (Univer paints on a canvas, so a
     // font must be in the FontFaceSet or text falls back to serif). Once loaded,
-    // re-measure so text re-lays-out in the right typeface at the correct size.
+    // recompute the render skeleton so text re-measures in the right typeface
+    // (refreshCanvas → SheetSkeletonManagerService.reCalculate, size-INDEPENDENT),
+    // AND re-size the canvas in case it was built at 0×0 (forceCanvasResize →
+    // engine.resize, which is size-GATED). These address different failure modes —
+    // stale text metrics vs a 0×0 canvas — so run BOTH, not one instead of the other.
     if (snapshot) {
-      void ensureFontsForSnapshot(snapshot).then(() => forceCanvasResize(univerAPI));
+      void ensureFontsForSnapshot(snapshot).then(() => {
+        try { (univerAPI.getActiveWorkbook()?.getActiveSheet() as unknown as { refreshCanvas?: () => void })?.refreshCanvas?.(); }
+        catch { /* facade surface differs — best-effort */ }
+        forceCanvasResize(univerAPI);
+      });
     }
 
     // --- Configurable behaviors (all opt-in, driven by the column config) ----
