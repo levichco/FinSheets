@@ -104,13 +104,16 @@ export function createSheet({
     // Our date/id columns are intentionally text — suppress Univer's
     // "number stored as text" green-triangle marks + alert popup.
     sheets: { disableForceStringAlert: true, disableForceStringMark: true },
-    // Trust the cached values the converter carried over from Excel; do NOT
-    // recompute every formula up front. Univer's initial recalc turns functions
-    // it doesn't support (and formulas pointing at the workbook's own #REF! cells)
-    // into #NAME?/#VALUE!, clobbering the correct numbers Excel/Google Sheets show.
-    // Editing still recomputes dependents at runtime — this only suppresses the
-    // destructive on-load recalc so an imported sheet renders exactly as authored.
-    formula: { initialFormulaComputing: CalculationMode.NO_CALCULATION },
+    // WHEN_EMPTY (Univer's default): compute ONLY formula cells that have no cached
+    // value; leave cells that already carry a cached value untouched. This preserves
+    // the numbers Excel/Google Sheets baked in (a FORCED full recalc would turn
+    // unsupported functions and self-#REF! into #NAME?/#VALUE!, clobbering them) while
+    // still filling in totals for uploaded/exported sheets whose formula cells have NO
+    // cached value — NO_CALCULATION left those permanently blank (e.g. a SUM row shows
+    // nothing, and a dependent cell that reads it computes a WRONG result treating the
+    // blank as 0). WHEN_EMPTY computes those empties on load so totals render correctly.
+    // Editing still recomputes dependents at runtime.
+    formula: { initialFormulaComputing: CalculationMode.WHEN_EMPTY },
   };
   if (footer === false) presetConfig.footer = false; // omit → Univer default (shown)
 
