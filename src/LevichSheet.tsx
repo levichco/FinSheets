@@ -334,15 +334,33 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
                 } | undefined;
               })?.getActiveSheet?.();
               if (!sheet?.getRange) return;
-              // #12: fill truly-empty formula cells by re-applying their formula (a
-              // targeted recompute; cached-value cells — incl. genuine zeros — are never touched).
-              for (const { row, column, formula } of empties) {
-                try { sheet.getRange(row, column)?.setValue?.({ f: formula }); } catch { /* per-cell best-effort */ }
-              }
-              // #2: jump to + select the anchor / "#" cell (else the first data cell A2).
+              // #2: jump to + select the anchor / "#" cell FIRST (else the first data
+              // cell A2) so the view settles immediately, before the recompute below.
               const anchor = target ?? { row: 1, column: 0 };
               sheet.getRange(anchor.row, anchor.column)?.activate?.();
               try { sheet.scrollToCell?.(anchor.row, anchor.column); } catch { /* scroll best-effort */ }
+              // #12: fill truly-empty formula cells by re-applying their formula (a
+              // targeted recompute; cached-value cells — incl. genuine zeros — are never
+              // touched). Written in CHUNKS that yield to the event loop between batches:
+              // a tight synchronous loop over thousands of empty-formula cells (every
+              // total blank under NO_CALCULATION) dispatched one Facade command each and
+              // froze the tab on open of a large workbook. Chunking keeps it responsive
+              // (totals fill in progressively) instead of a multi-second hang.
+              if (empties.length) {
+                const CHUNK = 200;
+                let i = 0;
+                const schedule = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (cb: () => void) => setTimeout(cb, 0);
+                const writeChunk = () => {
+                  if (!apiRef.current) return; // component disposed mid-recompute — stop
+                  const end = Math.min(i + CHUNK, empties.length);
+                  for (; i < end; i++) {
+                    const { row, column, formula } = empties[i];
+                    try { sheet.getRange?.(row, column)?.setValue?.({ f: formula }); } catch { /* per-cell best-effort */ }
+                  }
+                  if (i < empties.length) schedule(writeChunk);
+                };
+                writeChunk();
+              }
             } catch {
               /* post-load pass is best-effort */
             }
@@ -397,7 +415,9 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
     if (!api) return;
     try {
       const sheet = (api.getActiveWorkbook() as unknown as {
-        getActiveSheet?: () => { getRange?: (r: number, c: number) => { setValue?: (v: unknown) => void } | undefined } | undefined;
+        getActiveSheet?: () => {
+          getRange?: (r: number, c: number, numRows?: number, numColumns?: number) => { setValue?: (v: unknown) => void; setValues?: (v: unknown) => unknown } | undefined;
+        } | undefined;
       })?.getActiveSheet?.();
       if (!sheet?.getRange) return;
 
@@ -406,14 +426,25 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
       const clearRows = Math.max(prev.rows, region.rowCount);
       const clearCols = Math.max(prev.cols, region.columnCount);
 
-      // Clear the union of the old + new rectangle, then write the new cells. An
-      // empty write blanks value + style (a `null` cell).
-      for (let r = 0; r < clearRows; r++) {
-        const rowCells = region.cells[r] ?? {};
-        for (let c = 0; c < clearCols; c++) {
-          const cell = rowCells[c] as Cell | undefined;
-          try { sheet.getRange(r, c)?.setValue?.(cell ?? { v: "", s: null }); } catch { /* per-cell best-effort */ }
+      // Write the union of the old + new rectangle in a SINGLE bulk `setValues`
+      // command (one recalc/render) instead of one Facade `setValue` per cell.
+      // The per-cell loop dispatched clearRows×clearCols synchronous commands and
+      // froze the tab on a large pivot / every spec change. Cells outside the new
+      // region are written as blank ({ v:"", s:null }) so a shrinking layout leaves
+      // no stale rows/columns behind.
+      if (clearRows > 0 && clearCols > 0) {
+        const matrix: unknown[][] = new Array(clearRows);
+        for (let r = 0; r < clearRows; r++) {
+          const rowCells = region.cells[r] ?? {};
+          const row: unknown[] = new Array(clearCols);
+          for (let c = 0; c < clearCols; c++) row[c] = (rowCells[c] as Cell | undefined) ?? { v: "", s: null };
+          matrix[r] = row;
         }
+        const range = sheet.getRange(0, 0, clearRows, clearCols);
+        if (range?.setValues) range.setValues(matrix);
+        else
+          // Fallback for a Facade without bulk setValues: per-cell (rare/old build).
+          for (let r = 0; r < clearRows; r++) for (let c = 0; c < clearCols; c++) { try { sheet.getRange(r, c)?.setValue?.((matrix[r] as unknown[])[c]); } catch { /* best-effort */ } }
       }
       lastPivotRectRef.current = { rows: region.rowCount, cols: region.columnCount };
     } catch {

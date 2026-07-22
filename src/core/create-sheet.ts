@@ -132,8 +132,25 @@ export function createSheet({
   // Count/Average bar users expect. Re-enable JUST the statistic bar via the
   // granular footer object (StatusBarController computes it automatically off the
   // selection — no host wiring). When statsBar is off too, drop the footer entirely.
+  // Guard the native selection statistic bar on very large sheets. Univer's
+  // StatusBarController recomputes Sum/Count/Average/Min/Max over the ENTIRE
+  // current selection SYNCHRONOUSLY on every selection change, so selecting a
+  // whole column/row or Ctrl+A on a huge dashboard sheet freezes the tab. Above a
+  // populated-cell threshold we drop the stat bar to keep large workbooks
+  // responsive (normal-sized sheets keep it).
+  const STAT_BAR_MAX_CELLS = 50_000;
+  let statsBarEffective = statsBar;
+  if (statsBar) {
+    let cells = 0;
+    const wbSheets = (workbookData as { sheets?: Record<string, { cellData?: Record<string, Record<string, unknown>> }> } | undefined)?.sheets ?? {};
+    for (const id of Object.keys(wbSheets)) {
+      const cd = wbSheets[id]?.cellData ?? {};
+      for (const rk of Object.keys(cd)) cells += Object.keys(cd[rk] ?? {}).length;
+      if (cells > STAT_BAR_MAX_CELLS) { statsBarEffective = false; break; }
+    }
+  }
   if (footer === false) {
-    presetConfig.footer = statsBar ? { sheetBar: false, statisticBar: true, menus: false, zoomSlider: false } : false;
+    presetConfig.footer = statsBarEffective ? { sheetBar: false, statisticBar: true, menus: false, zoomSlider: false } : false;
   }
 
   const { univer, univerAPI } = createUniver({

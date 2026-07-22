@@ -72,4 +72,40 @@ describe("export fidelity (snapshot → .xlsx → reload)", () => {
   it("returns 0 rows for an empty/not-ready snapshot (no corrupt file)", () => {
     expect(buildExcelWorkbook({}).rowCount).toBe(0);
   });
+
+  it("exports EVERY sheet in order, not just the first (full-workbook download)", async () => {
+    const multi: WorkbookSnapshot = {
+      sheetOrder: ["s1", "s2", "s3"],
+      sheets: {
+        s1: { name: "Dashboard", cellData: { 0: { 0: { v: "KPI" } } } },
+        s2: { name: "Balance Sheet", cellData: { 0: { 0: { v: "Assets" }, 1: { v: 100 } }, 1: { 0: { v: "Liabilities" }, 1: { v: 40 } } } },
+        s3: { name: "Financials/QA", cellData: { 0: { 0: { v: "Note" } } } }, // name has an illegal "/" → sanitized
+      },
+    };
+    const { workbook, rowCount } = buildExcelWorkbook(multi);
+    expect(workbook.worksheets.length).toBe(3);
+    expect(rowCount).toBe(4); // 1 + 2 + 1 populated rows across all sheets
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const reopened = new ExcelJS.Workbook();
+    await reopened.xlsx.load(buffer as ArrayBuffer);
+    expect(reopened.worksheets.map((w) => w.name)).toEqual(["Dashboard", "Balance Sheet", "Financials QA"]);
+    // Data from a NON-first sheet survives (the old single-sheet export dropped this).
+    expect(reopened.getWorksheet("Balance Sheet")?.getCell("B1").value).toBe(100);
+    expect(reopened.getWorksheet("Balance Sheet")?.getCell("B2").value).toBe(40);
+  });
+
+  it("de-duplicates and length-caps sheet names Excel would reject", () => {
+    const dup: WorkbookSnapshot = {
+      sheetOrder: ["a", "b"],
+      sheets: {
+        a: { name: "Report", cellData: { 0: { 0: { v: 1 } } } },
+        b: { name: "Report", cellData: { 0: { 0: { v: 2 } } } }, // duplicate name
+      },
+    };
+    const { workbook } = buildExcelWorkbook(dup);
+    const names = workbook.worksheets.map((w) => w.name);
+    expect(new Set(names).size).toBe(2); // both present, uniquified
+    names.forEach((n) => expect(n.length).toBeLessThanOrEqual(31));
+  });
 });

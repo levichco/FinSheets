@@ -144,15 +144,10 @@ function applyStyle(cell: ExcelJS.Cell, style?: SnapshotStyle): void {
 
 /* ---- Pure snapshot → ExcelJS workbook ------------------------------------- */
 
-export function buildExcelWorkbook(snapshot: WorkbookSnapshot): { workbook: ExcelJS.Workbook; rowCount: number } {
-  const wb = new ExcelJS.Workbook();
-  const sheetId = snapshot.sheetOrder?.[0] ?? Object.keys(snapshot.sheets ?? {})[0];
-  const sheet = sheetId ? snapshot.sheets?.[sheetId] : undefined;
-  const ws = wb.addWorksheet(sheet?.name || "Sheet1");
-
-  const styles = snapshot.styles;
+/** Populate one ExcelJS worksheet from a single sheet snapshot. Returns the
+ *  number of rows that carried at least one cell. */
+function populateWorksheet(ws: ExcelJS.Worksheet, sheet: SnapshotSheet | undefined, styles: WorkbookSnapshot["styles"]): number {
   const cellData = sheet?.cellData ?? {};
-
   const usedRows = new Set<number>();
   for (const [rowKey, cols] of Object.entries(cellData)) {
     const r = Number(rowKey);
@@ -192,7 +187,34 @@ export function buildExcelWorkbook(snapshot: WorkbookSnapshot): { workbook: Exce
     ws.views = [{ state: "frozen", xSplit: freeze.xSplit ?? 0, ySplit: freeze.ySplit ?? 0 }];
   }
 
-  return { workbook: wb, rowCount: usedRows.size };
+  return usedRows.size;
+}
+
+export function buildExcelWorkbook(snapshot: WorkbookSnapshot): { workbook: ExcelJS.Workbook; rowCount: number } {
+  const wb = new ExcelJS.Workbook();
+  const styles = snapshot.styles;
+
+  // Export EVERY sheet in workbook order — not just sheetOrder[0]. A shell-workbook
+  // download assembles all sheets into the snapshot, so serializing only the first
+  // one silently produced a single-sheet file ("not the full excel").
+  const order = snapshot.sheetOrder?.length ? snapshot.sheetOrder : Object.keys(snapshot.sheets ?? {});
+  let rowCount = 0;
+  let index = 0;
+  const usedNames = new Set<string>();
+  for (const sheetId of order) {
+    const sheet = snapshot.sheets?.[sheetId];
+    // Excel sheet names must be unique, ≤31 chars, and exclude : \ / ? * [ ].
+    let name = (sheet?.name || `Sheet${index + 1}`).replace(/[:\\/?*[\]]/g, " ").slice(0, 31) || `Sheet${index + 1}`;
+    while (usedNames.has(name.toLowerCase())) name = `${name.slice(0, 28)}_${index + 1}`.slice(0, 31);
+    usedNames.add(name.toLowerCase());
+    const ws = wb.addWorksheet(name);
+    rowCount += populateWorksheet(ws, sheet, styles);
+    index++;
+  }
+  // Never emit a zero-sheet workbook (ExcelJS write would throw).
+  if (wb.worksheets.length === 0) wb.addWorksheet("Sheet1");
+
+  return { workbook: wb, rowCount };
 }
 
 /* ---- Browser download ----------------------------------------------------- */
