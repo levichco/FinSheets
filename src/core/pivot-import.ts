@@ -255,6 +255,62 @@ async function parseCacheDefinition(xml: string): Promise<CacheDefXml> {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Exact table↔cache pairing via relationship parts                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Resolve the `pivotCacheDefinition` part a `pivotTable{N}.xml` is bound to by
+ * reading its relationships part `xl/pivotTables/_rels/pivotTable{N}.xml.rels`.
+ *
+ * A pivot table has exactly one relationship of type
+ * `.../pivotCacheDefinition` whose `Target` points (relative to the pivotTable
+ * part) at the cache-definition part — e.g. `Target="../pivotCache/pivotCacheDefinition2.xml"`.
+ * This is the AUTHORITATIVE link; the field-count heuristic can mis-pair a
+ * multi-cache workbook where two caches happen to have compatible field counts.
+ *
+ * Returns the resolved, normalised cache-definition part path
+ * (`xl/pivotCache/pivotCacheDefinition2.xml`) or `null` if the rels part is
+ * absent / unreadable / carries no cache relationship (→ caller falls back to
+ * the heuristic).
+ *
+ * @param tablePath e.g. `xl/pivotTables/pivotTable1.xml`
+ * @param relsXml   raw text of the sibling `_rels/pivotTable1.xml.rels`, or null
+ */
+async function resolveCacheDefForTable(tablePath: string, relsXml: string | null): Promise<string | null> {
+  if (!relsXml) return null;
+  let target: string | null = null;
+  await walkXml(relsXml, (t) => {
+    if (t.name !== "Relationship") return;
+    const type = t.attributes.Type ?? "";
+    // Match the cache-definition relationship type (namespace-version agnostic).
+    if (/pivotCacheDefinition$/i.test(type) && t.attributes.Target) {
+      target = t.attributes.Target;
+    }
+  });
+  if (!target) return null;
+  return resolveRelTarget(tablePath, target);
+}
+
+/**
+ * Resolve a relationship `Target` (which is relative to the SOURCE part's
+ * directory) against the source part's path, and normalise `..`/`.` segments
+ * into a clean zip path. Handles absolute targets (leading `/`) too.
+ */
+function resolveRelTarget(sourcePath: string, target: string): string | null {
+  if (!target) return null;
+  // Absolute target inside the package (`/xl/pivotCache/...`).
+  if (target.startsWith("/")) return target.replace(/^\/+/, "");
+  const baseDir = sourcePath.includes("/") ? sourcePath.slice(0, sourcePath.lastIndexOf("/")) : "";
+  const segs = baseDir ? baseDir.split("/") : [];
+  for (const part of target.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") segs.pop();
+    else segs.push(part);
+  }
+  return segs.join("/");
+}
+
+/* -------------------------------------------------------------------------- */
 /* pivotCacheRecords*.xml (fallback)                                          */
 /* -------------------------------------------------------------------------- */
 
@@ -441,11 +497,11 @@ export async function parsePivotsFromXlsx(bytes: ArrayBuffer, snapshot: Workbook
   const tablePaths = Object.keys(zip.files).filter((p) => /^xl\/pivotTables\/pivotTable\d+\.xml$/i.test(p)).sort();
   if (!tablePaths.length) return [];
 
-  // Pre-load every cache definition + records once (a table maps to a cache via
-  // the workbook rels, but we can robustly pair by trying each cache — most
-  // workbooks have one cache per table and the field-name lists are consistent).
+  // Pre-load every cache definition + records once. Each cache keeps its own
+  // part `path` so a table can be paired to its cache EXACTLY via the pivotTable
+  // rels (below); the field-count heuristic is only a fallback.
   const cacheDefPaths = Object.keys(zip.files).filter((p) => /^xl\/pivotCache\/pivotCacheDefinition\d+\.xml$/i.test(p)).sort();
-  const caches: Array<{ def: CacheDefXml; recordsPath: string | null }> = [];
+  const caches: Array<{ path: string; def: CacheDefXml; recordsPath: string | null }> = [];
   for (const p of cacheDefPaths) {
     const xml = await readText(p);
     if (!xml) continue;
@@ -453,8 +509,9 @@ export async function parsePivotsFromXlsx(bytes: ArrayBuffer, snapshot: Workbook
     // Records file is the sibling with the same numeric suffix.
     const num = /(\d+)\.xml$/.exec(p)?.[1];
     const recordsPath = num ? `xl/pivotCache/pivotCacheRecords${num}.xml` : null;
-    caches.push({ def, recordsPath: recordsPath && zip.file(recordsPath) ? recordsPath : null });
+    caches.push({ path: p, def, recordsPath: recordsPath && zip.file(recordsPath) ? recordsPath : null });
   }
+  const cacheByPath = new Map(caches.map((c) => [c.path, c]));
 
   const out: ImportedPivot[] = [];
 
@@ -464,10 +521,20 @@ export async function parsePivotsFromXlsx(bytes: ArrayBuffer, snapshot: Workbook
       if (!tableXml) continue;
       const parsed = await parsePivotTableXml(tableXml);
 
-      // Pick the cache whose field set covers this table's referenced indices.
-      // Prefer the one with an in-workbook worksheetSource; else any.
+      // EXACT pairing: resolve this table → its cache via the pivotTable rels
+      // (`xl/pivotTables/_rels/pivotTable{N}.xml.rels`). This is authoritative
+      // in a multi-cache workbook. Falls through to the field-count heuristic if
+      // the rels part is absent / unreadable / lacks a cache relationship.
+      const relsPath = tp.replace(/([^/]+)$/, "_rels/$1.rels");
+      const relsXml = await readText(relsPath);
+      const cacheDefPath = await resolveCacheDefForTable(tp, relsXml);
+      const exactCache = cacheDefPath ? cacheByPath.get(cacheDefPath) : undefined;
+
+      // HEURISTIC fallback: pick the cache whose field set covers this table's
+      // referenced indices, preferring one with an in-workbook worksheetSource.
       const maxIdx = Math.max(-1, ...parsed.rowFields, ...parsed.colFields, ...parsed.dataFields.map((d) => d.fld));
       const cache =
+        exactCache ??
         caches.find((c) => c.def.worksheetSource && c.def.fields.length > maxIdx) ??
         caches.find((c) => c.def.fields.length > maxIdx) ??
         caches[0];

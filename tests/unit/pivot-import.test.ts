@@ -131,6 +131,139 @@ describe("parsePivotsFromXlsx — FALLBACK (embedded cache records)", () => {
   });
 });
 
+/* -------------------------------------------------------------------------- */
+/* Exact table↔cache pairing via rels (2-cache workbook)                      */
+/* -------------------------------------------------------------------------- */
+
+// Two distinct caches over two distinct source sheets, with the pivotTable rels
+// CROSSED relative to numeric order (pivotTable1 → cache2, pivotTable2 → cache1)
+// so a numeric/heuristic pairing would swap them. Field sets differ so a wrong
+// pairing yields a demonstrably wrong spec + source.
+
+// Cache 1: sales data (region, product, amount) over sheet "Sales".
+const CACHE_DEF_1 = `<?xml version="1.0"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:C4" sheet="Sales"/></cacheSource>
+  <cacheFields count="3">
+    <cacheField name="region"><sharedItems/></cacheField>
+    <cacheField name="product"><sharedItems/></cacheField>
+    <cacheField name="amount"><sharedItems containsNumber="1"/></cacheField>
+  </cacheFields>
+</pivotCacheDefinition>`;
+
+// Cache 2: headcount data (dept, region, headcount) over sheet "HR".
+const CACHE_DEF_2 = `<?xml version="1.0"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:C4" sheet="HR"/></cacheSource>
+  <cacheFields count="3">
+    <cacheField name="dept"><sharedItems/></cacheField>
+    <cacheField name="region"><sharedItems/></cacheField>
+    <cacheField name="headcount"><sharedItems containsNumber="1"/></cacheField>
+  </cacheFields>
+</pivotCacheDefinition>`;
+
+// pivotTable1 → rows=dept,region values=sum(headcount)  (belongs to cache2/HR)
+const PIVOT_TABLE_1 = `<?xml version="1.0"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotHR" cacheId="2">
+  <location ref="E3:F10" firstHeaderRow="1" firstDataRow="2" firstDataCol="1"/>
+  <rowFields count="2"><field x="0"/><field x="1"/></rowFields>
+  <colFields count="1"><field x="-2"/></colFields>
+  <dataFields count="1"><dataField name="Sum of headcount" fld="2" subtotal="sum"/></dataFields>
+</pivotTableDefinition>`;
+
+// pivotTable2 → rows=region,product values=sum(amount)  (belongs to cache1/Sales)
+const PIVOT_TABLE_2 = `<?xml version="1.0"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotSales" cacheId="1">
+  <location ref="H3:I10" firstHeaderRow="1" firstDataRow="2" firstDataCol="1"/>
+  <rowFields count="2"><field x="0"/><field x="1"/></rowFields>
+  <colFields count="1"><field x="-2"/></colFields>
+  <dataFields count="1"><dataField name="Sum of amount" fld="2" subtotal="sum"/></dataFields>
+</pivotTableDefinition>`;
+
+// Rels CROSS the numeric order: table1→cache2, table2→cache1.
+const RELS_1 = `<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="../pivotCache/pivotCacheDefinition2.xml"/>
+</Relationships>`;
+const RELS_2 = `<?xml version="1.0"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="../pivotCache/pivotCacheDefinition1.xml"/>
+</Relationships>`;
+
+async function makeTwoCacheXlsx(opts: { withRels: boolean }): Promise<ArrayBuffer> {
+  const wb = new ExcelJS.Workbook();
+  const sales = wb.addWorksheet("Sales");
+  sales.addRow(["region", "product", "amount"]);
+  sales.addRow(["West", "A", 100]);
+  sales.addRow(["East", "B", 200]);
+
+  const hr = wb.addWorksheet("HR");
+  hr.addRow(["dept", "region", "headcount"]);
+  hr.addRow(["Eng", "West", 7]);
+  hr.addRow(["Ops", "East", 3]);
+
+  const buf = (await wb.xlsx.writeBuffer()) as ArrayBuffer;
+  const zip = await JSZip.loadAsync(buf);
+  zip.file("xl/pivotTables/pivotTable1.xml", PIVOT_TABLE_1);
+  zip.file("xl/pivotTables/pivotTable2.xml", PIVOT_TABLE_2);
+  zip.file("xl/pivotCache/pivotCacheDefinition1.xml", CACHE_DEF_1);
+  zip.file("xl/pivotCache/pivotCacheDefinition2.xml", CACHE_DEF_2);
+  if (opts.withRels) {
+    zip.file("xl/pivotTables/_rels/pivotTable1.xml.rels", RELS_1);
+    zip.file("xl/pivotTables/_rels/pivotTable2.xml.rels", RELS_2);
+  }
+  const out = (await zip.generateAsync({ type: "uint8array" })) as Uint8Array;
+  return out.slice().buffer;
+}
+
+describe("parsePivotsFromXlsx — exact table↔cache pairing (2-cache workbook)", () => {
+  it("pairs each pivot table to its cache via rels, even when crossed vs numeric order", async () => {
+    const ab = await makeTwoCacheXlsx({ withRels: true });
+    const file = { name: "two.xlsx", arrayBuffer: async () => ab };
+    const snap = (await parseXlsxToSnapshot(file as unknown as File)) as WorkbookData;
+    const pivots = await parsePivotsFromXlsx(ab, snap);
+
+    expect(pivots.length).toBe(2);
+    const byValueField = new Map(pivots.map((p) => [p.spec.values[0].field, p]));
+
+    // pivotTable1 (numeric first) must resolve to cache2 = HR (dept/region/headcount).
+    const hrPivot = byValueField.get("headcount")!;
+    expect(hrPivot).toBeDefined();
+    expect(hrPivot.spec.rows).toEqual(["dept", "region"]);
+    expect(hrPivot.source.fields).toEqual(["dept", "region", "headcount"]);
+    expect(hrPivot.source.rows).toEqual([
+      { dept: "Eng", region: "West", headcount: 7 },
+      { dept: "Ops", region: "East", headcount: 3 },
+    ]);
+
+    // pivotTable2 must resolve to cache1 = Sales (region/product/amount).
+    const salesPivot = byValueField.get("amount")!;
+    expect(salesPivot).toBeDefined();
+    expect(salesPivot.spec.rows).toEqual(["region", "product"]);
+    expect(salesPivot.source.fields).toEqual(["region", "product", "amount"]);
+    expect(salesPivot.source.rows).toEqual([
+      { region: "West", product: "A", amount: 100 },
+      { region: "East", product: "B", amount: 200 },
+    ]);
+  });
+
+  it("falls back to the heuristic (and MIS-pairs) when rels are absent — proving rels are load-bearing", async () => {
+    // Without rels, both caches have an in-workbook source + 3 fields, so the
+    // heuristic picks the FIRST such cache (cache1/Sales) for BOTH tables. This
+    // asserts the pre-fix behaviour to prove the rels test above is meaningful.
+    const ab = await makeTwoCacheXlsx({ withRels: false });
+    const file = { name: "two.xlsx", arrayBuffer: async () => ab };
+    const snap = (await parseXlsxToSnapshot(file as unknown as File)) as WorkbookData;
+    const pivots = await parsePivotsFromXlsx(ab, snap);
+
+    expect(pivots.length).toBe(2);
+    // Both fall onto cache1 (Sales) → both source-field lists are Sales'.
+    for (const p of pivots) {
+      expect(p.source.fields).toEqual(["region", "product", "amount"]);
+    }
+  });
+});
+
 describe("parsePivotsFromXlsx — no pivots", () => {
   it("returns [] for a plain workbook", async () => {
     const wb = new ExcelJS.Workbook();
