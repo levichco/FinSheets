@@ -23,6 +23,9 @@ export type { SheetDiff } from "./features/version-diff";
 export { RenameModal } from "./components/rename-modal";
 export type { RenameModalProps } from "./components/rename-modal";
 export { FindReplaceModal } from "./components/find-replace-modal";
+export { PivotPanel } from "./features/pivot-panel";
+export type { PivotPanelProps, PivotArea } from "./features/pivot-panel";
+export { computePivotModel, renderPivotModel, valueLabel } from "./features/pivot-model";
 export { LEVICH_BRAND } from "./theme/brand";
 
 export type {
@@ -33,6 +36,12 @@ export type {
   FooterConfig,
   PivotConfig,
   PivotAggregate,
+  PivotSource,
+  PivotSpec,
+  PivotValueField,
+  PivotFilterField,
+  PivotModel,
+  PivotNode,
   CellEditEvent,
   ImportLocation,
   LevichSheetProps,

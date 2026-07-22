@@ -20,9 +20,11 @@ import { attachComments } from "./features/comments";
 import { attachFilterPanel } from "./features/filter-panel";
 import { attachLockColumns } from "./features/lock-columns";
 import { buildPivotCells, computePivot } from "./features/pivot";
+import { computePivotModel, renderPivotModel } from "./features/pivot-model";
+import { PivotPanel } from "./features/pivot-panel";
 import { SheetTabMenu } from "./features/sheet-tab-menu";
 import { emptyFormulaCells, findHashCell } from "./core/snapshot-scan";
-import type { LevichSheetHandle, LevichSheetProps } from "./core/types";
+import type { Cell, LevichSheetHandle, LevichSheetProps, PivotSource, PivotSpec } from "./core/types";
 
 function ribbonFor(toolbar: LevichSheetProps["toolbar"]): "collapsed" | "simple" | "classic" {
   if (toolbar === "full") return "classic";
@@ -30,14 +32,79 @@ function ribbonFor(toolbar: LevichSheetProps["toolbar"]): "collapsed" | "simple"
   return "simple";
 }
 
+/**
+ * A sensible starting pivot layout when the host doesn't supply one: the first
+ * text-like field becomes the row grouping, and the first numeric field is
+ * summed. Falls back to counting the first field when nothing looks numeric.
+ */
+function defaultPivotSpec(source: PivotSource): PivotSpec {
+  const fields = source.fields;
+  const sample = source.rows[0] ?? {};
+  const isNumeric = (f: string) => {
+    const v = sample[f];
+    return typeof v === "number" || (v != null && v !== "" && Number.isFinite(Number(v)));
+  };
+  const numericField = fields.find(isNumeric);
+  const textField = fields.find((f) => f !== numericField && !isNumeric(f)) ?? fields.find((f) => f !== numericField);
+  return {
+    rows: textField ? [textField] : fields.slice(0, 1),
+    columns: [],
+    values: numericField ? [{ field: numericField, aggregate: "sum" }] : [{ field: fields[0] ?? "value", aggregate: "count" }],
+  };
+}
+
+/**
+ * Map the ABSOLUTE sheet row of every collapsible group-label cell → that node's
+ * collapse `path`. Mirrors `renderPivotModel`'s row walk exactly so clicking a
+ * ▸/▾ label can toggle the right node. Only nodes WITH children are collapsible.
+ */
+function collapsibleRowPaths(model: ReturnType<typeof computePivotModel>): Map<number, string> {
+  const { spec } = model;
+  const collapsed = new Set(spec.collapsed ?? []);
+  const showRowSubtotals = spec.showRowSubtotals ?? spec.rows.length > 1;
+  const colDepth = spec.columns.length;
+  const headerRows = (colDepth > 0 ? 1 : 0) + 1; // column-group line (opt) + value-label line
+  const out = new Map<number, string>();
+  let r = headerRows;
+  const walk = (nodes: typeof model.rowTree) => {
+    for (const node of nodes) {
+      const hasChildren = node.children.length > 0;
+      const isCollapsed = collapsed.has(node.path);
+      if (hasChildren) out.set(r, node.path);
+      r++;
+      if (hasChildren && !isCollapsed) {
+        walk(node.children);
+        if (showRowSubtotals) r++; // subtotal row
+      }
+    }
+  };
+  walk(model.rowTree);
+  return out;
+}
+
 export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(function LevichSheet(props, ref) {
-  const { data, columns, snapshot, anchorCell, freeze, pivot, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, sheetBar, readOnly, className, onCellEdit, onColumnWidthsChange, onReady, onImport, onImportFile, onSave, onDownload, onNew, onMakeCopy, onRename, onCopyToExisting, onHideActiveSheet, onShowSheet, hiddenSheetList, canHideActiveSheet } = props;
+  const { data, columns, snapshot, anchorCell, freeze, pivot, pivotInteractive, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, sheetBar, readOnly, className, onCellEdit, onColumnWidthsChange, onReady, onImport, onImportFile, onSave, onDownload, onNew, onMakeCopy, onRename, onCopyToExisting, onHideActiveSheet, onShowSheet, hiddenSheetList, canHideActiveSheet } = props;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const univerRef = useRef<{ dispose: () => void } | null>(null);
   const apiRef = useRef<UniverAPI | null>(null);
   const [toolbarApi, setToolbarApi] = useState<UniverAPI | null>(null);
   const [findOpen, setFindOpen] = useState(false);
+
+  // ── Interactive pivot state ────────────────────────────────────────────────
+  // `spec` is the live pivot layout (driven by the drawer). It is applied to the
+  // grid via IN-PLACE Facade writes (no remount → no flicker), so it must NOT be
+  // in the build effect's deps. `specRef` mirrors it for the collapse click
+  // handler + the in-place writer; a ref of the last-rendered rectangle lets us
+  // clear stale cells before each redraw.
+  const [pivotSpec, setPivotSpec] = useState<PivotSpec | null>(() => (pivotInteractive ? pivotInteractive.initialSpec ?? defaultPivotSpec(pivotInteractive.source) : null));
+  const [pivotOpen, setPivotOpen] = useState<boolean>(!!pivotInteractive);
+  const specRef = useRef<PivotSpec | null>(pivotSpec);
+  specRef.current = pivotSpec;
+  const lastPivotRectRef = useRef<{ rows: number; cols: number }>({ rows: 0, cols: 0 });
+  // True until the first in-place write, so the initial render (done by the build
+  // effect) isn't redundantly re-written.
+  const pivotBuiltRef = useRef(false);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -56,6 +123,22 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
       const firstId = (snapshot.sheetOrder as string[] | undefined)?.[0];
       const firstSheet = firstId ? (snapshot.sheets as Record<string, { columnCount?: number }> | undefined)?.[firstId] : undefined;
       behaviorColumnCount = firstSheet?.columnCount ?? 26;
+    } else if (pivotInteractive) {
+      // Interactive pivot: render the current spec's region into a fresh sheet.
+      // Subsequent spec changes are written IN PLACE (see the pivot-apply effect
+      // below) — this build only lays down the initial grid + freeze geometry.
+      const spec = specRef.current ?? defaultPivotSpec(pivotInteractive.source);
+      const region = renderPivotModel(computePivotModel(pivotInteractive.source, spec));
+      behaviorColumnCount = Math.max(region.columnCount, 4);
+      lastPivotRectRef.current = { rows: region.rowCount, cols: region.columnCount };
+      pivotBuiltRef.current = true;
+      workbookData = buildWorkbook([], [], {
+        extraCells: region.cells,
+        extraRows: region.rowCount,
+        extraColumns: region.columnCount,
+        freeze: freeze ?? { rows: 1 },
+        columnWidths,
+      }).workbookData;
     } else if (pivot) {
       const result = computePivot(data, pivot);
       const region = buildPivotCells(result);
@@ -151,7 +234,7 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
       } catch { /* permission API differs — best-effort */ }
     }
 
-    if (!pivot && !snapshot) {
+    if (!pivot && !pivotInteractive && !snapshot) {
       const lockedColumns = columns.flatMap((c, i) => (c.locked ? [i] : []));
       const editableColumn = columns.findIndex((c) => c.editable);
       const rowKeyByIndex = new Map<number, string>();
@@ -170,7 +253,7 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
     // A1 — A1 is the bold header, which made the toolbar's B/I/U/S show
     // "pressed" on every load. Done at the Steady (3) lifecycle so it isn't
     // overwritten by the engine's initial A1 selection.
-    if (!pivot && !snapshot) {
+    if (!pivot && !pivotInteractive && !snapshot) {
       try {
         const lifeEvent = (univerAPI as unknown as { Event?: Record<string, string> }).Event?.LifeCycleChanged;
         if (lifeEvent) {
@@ -187,6 +270,47 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
         }
       } catch {
         /* lifecycle surface differs — best-effort */
+      }
+    }
+
+    // Interactive-pivot collapse/expand: clicking a group-label cell that carries
+    // a ▸/▾ chevron toggles that node's `path` in spec.collapsed (via specRef, so
+    // this handler doesn't need to be re-registered per spec change). Best-effort
+    // through the Facade selection event; the panel remains the source of truth.
+    if (pivotInteractive) {
+      try {
+        const f = univerAPI as unknown as { Event?: Record<string, string>; addEvent?: (e: string, cb: (p?: unknown) => void) => Disposer };
+        const ev = f.Event ?? {};
+        const onClick = () => {
+          const spec = specRef.current;
+          if (!spec) return;
+          try {
+            const wb = univerAPI.getActiveWorkbook() as unknown as {
+              getActiveRange?: () => { getRow?: () => number; getColumn?: () => number } | null;
+            };
+            const range = wb?.getActiveRange?.();
+            const row = range?.getRow?.();
+            const col = range?.getColumn?.();
+            if (col !== 0 || row == null) return; // only the row-label column (col 0)
+            const model = computePivotModel(pivotInteractive.source, spec);
+            const path = collapsibleRowPaths(model).get(row);
+            if (!path) return;
+            const collapsed = new Set(spec.collapsed ?? []);
+            if (collapsed.has(path)) collapsed.delete(path);
+            else collapsed.add(path);
+            setPivotSpec({ ...spec, collapsed: [...collapsed] });
+          } catch {
+            /* click resolution is best-effort */
+          }
+        };
+        if (f.addEvent) {
+          const d1 = f.addEvent(ev.SelectionMoveEnd ?? "SelectionMoveEnd", onClick);
+          const d2 = f.addEvent(ev.SelectionChanged ?? "SelectionChanged", onClick);
+          if (d1) disposers.push(d1);
+          if (d2) disposers.push(d2);
+        }
+      } catch {
+        /* selection surface differs — collapse falls back to a no-op */
       }
     }
 
@@ -255,7 +379,47 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
     };
     // The component is remounted per dataset via `key` upstream, so this is
     // effectively mount-once; deps cover the rebuild-on-change case.
-  }, [data, columns, snapshot, anchorCell, freeze, pivot, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, readOnly, onCellEdit, onColumnWidthsChange]);
+  }, [data, columns, snapshot, anchorCell, freeze, pivot, pivotInteractive, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, readOnly, onCellEdit, onColumnWidthsChange]);
+
+  // Interactive pivot: apply spec changes IN PLACE via Facade `setValue`, with no
+  // remount → no flicker. The build effect lays down the FIRST render (guarded by
+  // pivotBuiltRef so this effect skips that same paint). Each redraw clears the
+  // previous pivot rectangle before writing the new cells so stale rows/columns
+  // from a larger prior layout never linger.
+  useEffect(() => {
+    if (!pivotInteractive || !pivotSpec) return;
+    if (pivotBuiltRef.current) {
+      // The build effect just painted this exact spec — don't double-write.
+      pivotBuiltRef.current = false;
+      return;
+    }
+    const api = apiRef.current;
+    if (!api) return;
+    try {
+      const sheet = (api.getActiveWorkbook() as unknown as {
+        getActiveSheet?: () => { getRange?: (r: number, c: number) => { setValue?: (v: unknown) => void } | undefined } | undefined;
+      })?.getActiveSheet?.();
+      if (!sheet?.getRange) return;
+
+      const region = renderPivotModel(computePivotModel(pivotInteractive.source, pivotSpec));
+      const prev = lastPivotRectRef.current;
+      const clearRows = Math.max(prev.rows, region.rowCount);
+      const clearCols = Math.max(prev.cols, region.columnCount);
+
+      // Clear the union of the old + new rectangle, then write the new cells. An
+      // empty write blanks value + style (a `null` cell).
+      for (let r = 0; r < clearRows; r++) {
+        const rowCells = region.cells[r] ?? {};
+        for (let c = 0; c < clearCols; c++) {
+          const cell = rowCells[c] as Cell | undefined;
+          try { sheet.getRange(r, c)?.setValue?.(cell ?? { v: "", s: null }); } catch { /* per-cell best-effort */ }
+        }
+      }
+      lastPivotRectRef.current = { rows: region.rowCount, cols: region.columnCount };
+    } catch {
+      /* in-place apply is best-effort; the panel state stays authoritative */
+    }
+  }, [pivotSpec, pivotInteractive]);
 
   useImperativeHandle(
     ref,
@@ -280,6 +444,40 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
         {/* Injected-caret tab menu only for the NATIVE footer. When the host hides
             the native bar (sheetBar:false) it renders its own <SheetTabBar>. */}
         {sheetBar !== false && <SheetTabMenu api={toolbarApi} onCopyToExisting={onCopyToExisting} />}
+        {/* Interactive-pivot fields drawer + a floating toggle when it's closed. */}
+        {pivotInteractive && pivotSpec && pivotOpen && (
+          <PivotPanel
+            fields={pivotInteractive.source.fields}
+            spec={pivotSpec}
+            onChange={setPivotSpec}
+            onClose={() => setPivotOpen(false)}
+          />
+        )}
+        {pivotInteractive && !pivotOpen && (
+          <button
+            type="button"
+            onClick={() => setPivotOpen(true)}
+            aria-label="Show PivotTable fields"
+            style={{
+              position: "absolute",
+              top: 12,
+              right: 12,
+              zIndex: 50,
+              height: 34,
+              padding: "0 14px",
+              borderRadius: 8,
+              border: "1px solid #eaecf0",
+              background: "#fff",
+              color: "#344054",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+              boxShadow: "0 2px 8px rgba(16,24,40,0.10)",
+            }}
+          >
+            PivotTable Fields
+          </button>
+        )}
       </div>
     </div>
   );
