@@ -204,8 +204,13 @@ export function buildExcelWorkbook(snapshot: WorkbookSnapshot): { workbook: Exce
   for (const sheetId of order) {
     const sheet = snapshot.sheets?.[sheetId];
     // Excel sheet names must be unique, ≤31 chars, and exclude : \ / ? * [ ].
-    let name = (sheet?.name || `Sheet${index + 1}`).replace(/[:\\/?*[\]]/g, " ").slice(0, 31) || `Sheet${index + 1}`;
-    while (usedNames.has(name.toLowerCase())) name = `${name.slice(0, 28)}_${index + 1}`.slice(0, 31);
+    const base = (sheet?.name || `Sheet${index + 1}`).replace(/[:\\/?*[\]]/g, " ").slice(0, 31) || `Sheet${index + 1}`;
+    let name = base;
+    // Uniquify with an INCREMENTING counter (never a constant suffix) so the loop
+    // always produces a fresh candidate and is guaranteed to terminate against the
+    // finite usedNames set — even for adversarial names that collide with a suffix.
+    let dupN = 2;
+    while (usedNames.has(name.toLowerCase())) name = `${base.slice(0, 28)}_${dupN++}`.slice(0, 31);
     usedNames.add(name.toLowerCase());
     const ws = wb.addWorksheet(name);
     rowCount += populateWorksheet(ws, sheet, styles);

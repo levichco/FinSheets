@@ -108,4 +108,22 @@ describe("export fidelity (snapshot → .xlsx → reload)", () => {
     expect(new Set(names).size).toBe(2); // both present, uniquified
     names.forEach((n) => expect(n.length).toBeLessThanOrEqual(31));
   });
+
+  it("terminates on adversarial names that collide with the generated suffix", () => {
+    // "Report", "Report" (→ Report_2), and a third literally named "Report_2":
+    // a constant-suffix uniquifier would loop forever; the incrementing counter
+    // must resolve all three to distinct names.
+    const adversarial: WorkbookSnapshot = {
+      sheetOrder: ["a", "b", "c"],
+      sheets: {
+        a: { name: "Report", cellData: { 0: { 0: { v: 1 } } } },
+        b: { name: "Report", cellData: { 0: { 0: { v: 2 } } } },
+        c: { name: "Report_2", cellData: { 0: { 0: { v: 3 } } } },
+      },
+    };
+    const { workbook } = buildExcelWorkbook(adversarial);
+    const names = workbook.worksheets.map((w) => w.name);
+    expect(names.length).toBe(3);
+    expect(new Set(names.map((n) => n.toLowerCase())).size).toBe(3); // all distinct
+  });
 });
