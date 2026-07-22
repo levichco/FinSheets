@@ -67,6 +67,14 @@ export interface CreateSheetOptions {
   /** Show the bottom sheet-tab footer. Defaults to `true`. */
   footer?: boolean;
   /**
+   * Show Univer's native selection-statistic bar (Sum / Count / Average / Min /
+   * Max of the current multi-cell selection, like Excel / Google Sheets).
+   * Defaults to `true`. Kept even when `footer:false` hides Univer's own sheet
+   * tabs (the host renders its own tab bar) — the stat bar is a distinct footer
+   * sub-part, so we opt it back in explicitly. Set `false` to hide it.
+   */
+  statsBar?: boolean;
+  /**
    * Show Univer's built-in toolbar buttons. Defaults to `true`. Set `false`
    * when rendering the custom Levich toolbar (the formula bar still shows).
    */
@@ -86,6 +94,7 @@ export function createSheet({
   ribbonType = "simple",
   header = true,
   footer = true,
+  statsBar = true,
   univerToolbar = true,
   theme,
 }: CreateSheetOptions): CreatedSheet {
@@ -104,18 +113,28 @@ export function createSheet({
     // Our date/id columns are intentionally text — suppress Univer's
     // "number stored as text" green-triangle marks + alert popup.
     sheets: { disableForceStringAlert: true, disableForceStringMark: true },
-    // WHEN_EMPTY (Univer's default): compute ONLY formula cells that have no cached
-    // value; leave cells that already carry a cached value untouched. This preserves
-    // the numbers Excel/Google Sheets baked in (a FORCED full recalc would turn
-    // unsupported functions and self-#REF! into #NAME?/#VALUE!, clobbering them) while
-    // still filling in totals for uploaded/exported sheets whose formula cells have NO
-    // cached value — NO_CALCULATION left those permanently blank (e.g. a SUM row shows
-    // nothing, and a dependent cell that reads it computes a WRONG result treating the
-    // blank as 0). WHEN_EMPTY computes those empties on load so totals render correctly.
-    // Editing still recomputes dependents at runtime.
-    formula: { initialFormulaComputing: CalculationMode.WHEN_EMPTY },
+    // NO_CALCULATION on load: preserve EVERY value Excel/Google Sheets baked in and
+    // recompute nothing automatically. This is the fix for the "zero total vanishes"
+    // bug (Deferred-Revenue GL 2205): Univer's WHEN_EMPTY mode treats a cached value of
+    // exactly 0 as "empty" and recomputes it — and if the formula uses a function Univer
+    // can't evaluate (or a cross-sheet / self-#REF!), the cached 0 is overwritten with
+    // #NAME?/#REF! and a "matching" total silently disappears. NO_CALCULATION keeps that
+    // cached 0 intact. The one thing NO_CALCULATION would otherwise regress — formula
+    // cells that carry NO cached value (uploaded/exported sheets whose totals were never
+    // computed) rendering blank — is handled explicitly in LevichSheet's post-load pass,
+    // which recomputes ONLY those truly-empty formula cells (never the cached ones).
+    // Editing still recomputes dependents live at runtime.
+    formula: { initialFormulaComputing: CalculationMode.NO_CALCULATION },
   };
-  if (footer === false) presetConfig.footer = false; // omit → Univer default (shown)
+  // footer:false hides Univer's OWN footer (sheet tabs, menus, zoom) because the
+  // host renders its own <SheetTabBar>. But Univer's selection-statistic bar lives
+  // in that same footer region, so a plain `footer:false` also removes the Sum/
+  // Count/Average bar users expect. Re-enable JUST the statistic bar via the
+  // granular footer object (StatusBarController computes it automatically off the
+  // selection — no host wiring). When statsBar is off too, drop the footer entirely.
+  if (footer === false) {
+    presetConfig.footer = statsBar ? { sheetBar: false, statisticBar: true, menus: false, zoomSlider: false } : false;
+  }
 
   const { univer, univerAPI } = createUniver({
     locale: LocaleType.EN_US,

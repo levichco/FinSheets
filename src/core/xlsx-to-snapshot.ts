@@ -50,7 +50,7 @@ interface XCell {
   numFmt?: string;
   font?: XFont;
   fill?: { type?: string; pattern?: string; fgColor?: Argb; bgColor?: Argb };
-  alignment?: { horizontal?: string; vertical?: string; wrapText?: boolean; textRotation?: number | string };
+  alignment?: { horizontal?: string; vertical?: string; wrapText?: boolean; textRotation?: number | string; indent?: number };
   border?: { top?: XBorderEdge; bottom?: XBorderEdge; left?: XBorderEdge; right?: XBorderEdge };
 }
 interface XRow {
@@ -135,6 +135,7 @@ interface UStyle {
   tr?: { a: number; v: number };
   bd?: { t?: BorderSeg; b?: BorderSeg; l?: BorderSeg; r?: BorderSeg };
   n?: { pattern: string };
+  pd?: { t?: number; r?: number; b?: number; l?: number };
 }
 type UCell = { v?: string | number | boolean; f?: string; s?: string } | null;
 
@@ -289,6 +290,12 @@ function buildStyle(cell: XCell, isDate: boolean): UStyle {
     if (vv) s.vt = vv;
     if (al.wrapText) s.tb = 3; // WrapStrategy.WRAP
     if (typeof al.textRotation === "number" && al.textRotation) s.tr = { a: al.textRotation, v: 0 };
+    // Preserve cell indentation (Excel `alignment.indent`, one unit ≈ 3 chars). This is
+    // how PIVOT TABLES in the default "Compact" layout render their nested row-label
+    // hierarchy (feature #5) — without it the grouped labels collapse to a flat column
+    // and the pivot looks nothing like the original. Univer has no outline-grouping in
+    // the free preset, but cell left-padding (`pd.l`) faithfully reproduces the indent.
+    if (typeof al.indent === "number" && al.indent > 0) s.pd = { ...s.pd, l: Math.min(al.indent, 15) * 10 };
   }
   const b = cell.border;
   if (b) {

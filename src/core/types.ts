@@ -83,6 +83,14 @@ export interface LevichSheetProps {
    * `footer`/`pivot` are ignored. Produce one via `parseXlsxToSnapshot`.
    */
   snapshot?: WorkbookData;
+  /**
+   * Open scrolled to + with a specific cell selected (0-based row/column). When
+   * omitted, the sheet auto-detects a deliberate "#" anchor cell in the snapshot
+   * (a cell whose text starts with `#`, e.g. a preparer's review marker) and
+   * opens there; falling back to the first data cell. Lets a caller that already
+   * knows the target (e.g. a task reference) jump straight to it.
+   */
+  anchorCell?: { row: number; column: number };
   /** Freeze rows/columns. Omitted → freeze the top row. `false` → none. */
   freeze?: FreezeConfig;
   /** Optional pivot; renders a computed pivot region instead of the raw grid. */

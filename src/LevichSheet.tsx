@@ -21,6 +21,7 @@ import { attachFilterPanel } from "./features/filter-panel";
 import { attachLockColumns } from "./features/lock-columns";
 import { buildPivotCells, computePivot } from "./features/pivot";
 import { SheetTabMenu } from "./features/sheet-tab-menu";
+import { emptyFormulaCells, findHashCell } from "./core/snapshot-scan";
 import type { LevichSheetHandle, LevichSheetProps } from "./core/types";
 
 function ribbonFor(toolbar: LevichSheetProps["toolbar"]): "collapsed" | "simple" | "classic" {
@@ -30,7 +31,7 @@ function ribbonFor(toolbar: LevichSheetProps["toolbar"]): "collapsed" | "simple"
 }
 
 export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(function LevichSheet(props, ref) {
-  const { data, columns, snapshot, freeze, pivot, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, sheetBar, readOnly, className, onCellEdit, onColumnWidthsChange, onReady, onImport, onImportFile, onSave, onDownload, onNew, onMakeCopy, onRename, onCopyToExisting, onHideActiveSheet, onShowSheet, hiddenSheetList, canHideActiveSheet } = props;
+  const { data, columns, snapshot, anchorCell, freeze, pivot, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, sheetBar, readOnly, className, onCellEdit, onColumnWidthsChange, onReady, onImport, onImportFile, onSave, onDownload, onNew, onMakeCopy, onRename, onCopyToExisting, onHideActiveSheet, onShowSheet, hiddenSheetList, canHideActiveSheet } = props;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const univerRef = useRef<{ dispose: () => void } | null>(null);
@@ -189,6 +190,46 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
       }
     }
 
+    // Snapshot / rich-import path (host editor + xlsx import): recompute any truly-empty
+    // formula cells (companion to NO_CALCULATION — feature #12) and open at the anchor /
+    // "#" cell (feature #2). Both run at the Steady (3) lifecycle so they aren't
+    // overwritten by the engine's initial A1 selection.
+    if (snapshot) {
+      const target = anchorCell ?? findHashCell(snapshot);
+      const empties = emptyFormulaCells(snapshot);
+      try {
+        const lifeEvent = (univerAPI as unknown as { Event?: Record<string, string> }).Event?.LifeCycleChanged;
+        if (lifeEvent) {
+          const d = (univerAPI as unknown as { addEvent?: (e: string, cb: (p: { stage?: number }) => void) => Disposer }).addEvent?.(lifeEvent, (p) => {
+            if (p?.stage !== 3) return;
+            try {
+              const sheet = (univerAPI.getActiveWorkbook() as unknown as {
+                getActiveSheet?: () => {
+                  getRange?: (r: number, c: number) => { activate?: () => void; setValue?: (v: unknown) => void } | undefined;
+                  scrollToCell?: (r: number, c: number) => void;
+                } | undefined;
+              })?.getActiveSheet?.();
+              if (!sheet?.getRange) return;
+              // #12: fill truly-empty formula cells by re-applying their formula (a
+              // targeted recompute; cached-value cells — incl. genuine zeros — are never touched).
+              for (const { row, column, formula } of empties) {
+                try { sheet.getRange(row, column)?.setValue?.({ f: formula }); } catch { /* per-cell best-effort */ }
+              }
+              // #2: jump to + select the anchor / "#" cell (else the first data cell A2).
+              const anchor = target ?? { row: 1, column: 0 };
+              sheet.getRange(anchor.row, anchor.column)?.activate?.();
+              try { sheet.scrollToCell?.(anchor.row, anchor.column); } catch { /* scroll best-effort */ }
+            } catch {
+              /* post-load pass is best-effort */
+            }
+          });
+          if (d) disposers.push(d);
+        }
+      } catch {
+        /* lifecycle surface differs — best-effort */
+      }
+    }
+
     // Rich-import images are embedded in the snapshot as the SHEET_DRAWING_PLUGIN
     // resource, so Univer renders them at load — no post-load work needed here.
 
@@ -214,7 +255,7 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
     };
     // The component is remounted per dataset via `key` upstream, so this is
     // effectively mount-once; deps cover the rebuild-on-change case.
-  }, [data, columns, snapshot, freeze, pivot, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, readOnly, onCellEdit, onColumnWidthsChange]);
+  }, [data, columns, snapshot, anchorCell, freeze, pivot, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, readOnly, onCellEdit, onColumnWidthsChange]);
 
   useImperativeHandle(
     ref,
