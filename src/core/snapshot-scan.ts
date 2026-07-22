@@ -9,8 +9,19 @@ type Snap = { sheetOrder?: string[]; sheets?: Record<string, SnapSheet> };
 /** The active (first) sheet's cellData grid from a raw Univer snapshot (best-effort). */
 export function activeCellData(snapshot: unknown): Record<string, Record<string, SnapCell>> | undefined {
   const s = snapshot as Snap | undefined;
-  const id = s?.sheetOrder?.[0];
-  return id ? s?.sheets?.[id]?.cellData : undefined;
+  const order = s?.sheetOrder;
+  if (!order?.length) return undefined;
+  // Under the host's lazy SHELL-workbook model only the ACTIVE sheet carries real
+  // cellData; every other sheet is an empty shell. `sheetOrder[0]` is NOT necessarily
+  // the active sheet, so return the first sheet that actually has cell data (the
+  // hydrated/active one). Falls back to sheetOrder[0] for a fully-populated snapshot.
+  // This fixes open-at-# (findHashCell) and the empty-formula recompute for multi-sheet
+  // files whose active sheet isn't index 0.
+  for (const id of order) {
+    const cd = s?.sheets?.[id]?.cellData;
+    if (cd && Object.keys(cd).length > 0) return cd;
+  }
+  return s?.sheets?.[order[0]]?.cellData;
 }
 
 /** Matches Excel error tokens (`#REF!`, `#NAME?`, …) so the "#" anchor scan skips them. */

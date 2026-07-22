@@ -6,6 +6,20 @@ function snap(cells: Record<number, Record<number, { v?: unknown; f?: string }>>
   return { sheetOrder: ["s1"], sheets: { s1: { cellData: cells } } };
 }
 
+describe("activeCellData targets the HYDRATED sheet (shell-workbook model)", () => {
+  it("scans the first sheet WITH cell data, not sheetOrder[0] when 0 is an empty shell", () => {
+    // s1 = empty shell (active sheet is s2, which carries the real data + the # marker).
+    const shell = {
+      sheetOrder: ["s1", "s2"],
+      sheets: {
+        s1: { cellData: {} },
+        s2: { cellData: { 0: { 0: { v: "Header" } }, 3: { 1: { v: "#review" } } } },
+      },
+    };
+    expect(findHashCell(shell)).toEqual({ row: 3, column: 1 });
+  });
+});
+
 describe("findHashCell (feature #2 — open at the # cell)", () => {
   it("finds the first cell whose text starts with '#'", () => {
     const s = snap({
