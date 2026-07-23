@@ -184,6 +184,19 @@ describe("<PivotPanel />", () => {
     expect(onChange.mock.calls[0][0].dimSettings?.Region?.sortBy).toBe("Amount");
   });
 
+  it("Sort-by works when a field is BOTH a Row and a Value (no option collision)", () => {
+    // Amount grouped in Rows AND summed in Values. The Sort-by list must offer both "Amount"
+    // (by label) and "Sum of Amount" (by value) as DISTINCT choices; picking the value must
+    // store sortBy: "Amount", not be swallowed as the by-label default.
+    const spec: PivotSpec = { rows: ["Amount"], columns: [], values: [{ field: "Amount", aggregate: "sum" }] };
+    const onChange = vi.fn();
+    render(<PivotPanel fields={["Amount", "Region"]} spec={spec} onChange={onChange} />);
+    fireEvent.click(screen.getByLabelText("Sort Amount by"));
+    fireEvent.click(screen.getByText("Sum of Amount"));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0][0].dimSettings?.Amount?.sortBy).toBe("Amount");
+  });
+
   it("Clear all resets the pivot to empty", () => {
     const onChange = vi.fn();
     render(<PivotPanel fields={fields} spec={baseSpec} onChange={onChange} />);

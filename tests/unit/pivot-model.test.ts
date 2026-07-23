@@ -64,6 +64,19 @@ describe("computePivotModel", () => {
     expect(byLabel).toEqual(["East", "West"]);
   });
 
+  it("sorts a dimension BY ITS OWN field's aggregated value (dim field == value field — multi-area)", () => {
+    // The marquee multi-area case: group by `amount` AND sum `amount`, then sort the groups by
+    // that SUM. Each group is one distinct amount so sum == amount; desc → 30, 10, 5.
+    const src: PivotSource = { fields: ["amount"], rows: [{ amount: 5 }, { amount: 30 }, { amount: 10 }] };
+    const keys = computePivotModel(src, {
+      rows: ["amount"],
+      columns: [],
+      values: [{ field: "amount", aggregate: "sum" }],
+      dimSettings: { amount: { sortBy: "amount", order: "desc" } },
+    }).rowTree.map((n) => n.key);
+    expect(keys).toEqual(["30", "10", "5"]); // by value desc — NOT label order (which is 10,30,5)
+  });
+
   it("average TOTAL is over the union of underlying values, not an average-of-averages (Excel-exact)", () => {
     const spec: PivotSpec = { rows: ["region"], columns: ["product"], values: [{ field: "amount", aggregate: "average" }] };
     const m = computePivotModel(source, spec);

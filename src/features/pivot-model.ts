@@ -363,7 +363,11 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
   const valueSortIndex = (field: string | undefined): number => {
     if (!field) return -1;
     const sb = spec.dimSettings?.[field]?.sortBy;
-    if (!sb || sb === field) return -1; // default: sort by label (handled by sortKeys)
+    // `sortBy` is either undefined (→ sort by label, handled by sortKeys) or a VALUE field's
+    // name — including the case where that value field is ALSO this dimension's field. So we
+    // resolve it purely by looking it up in `values`; no `sb === field` short-circuit (that
+    // would wrongly block sorting a dimension by its own aggregated total).
+    if (!sb) return -1;
     return values.findIndex((v) => v.field === sb);
   };
   const applyValueSort = (children: PivotNode[], field: string | undefined): PivotNode[] => {
