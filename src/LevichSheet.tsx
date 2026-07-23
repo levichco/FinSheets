@@ -473,10 +473,22 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
     const n = Math.max(1, Math.floor(Number(addRowsN)) || 0);
     try {
       const sheet = apiRef.current?.getActiveWorkbook()?.getActiveSheet() as unknown as
-        | { getMaxRows?: () => number; insertRows?: (rowIndex: number, numRows: number) => void }
+        | {
+            getMaxRows?: () => number;
+            insertRows?: (rowIndex: number, numRows: number) => void;
+            insertRowsAfter?: (afterPosition: number, howMany: number) => void;
+            setRowCount?: (count: number) => void;
+          }
         | undefined;
-      const max = sheet?.getMaxRows?.() ?? 0;
-      sheet?.insertRows?.(max, n);
+      if (!sheet) return;
+      const max = sheet.getMaxRows?.() ?? 0;
+      // The Univer Facade exposes different row-growth methods across versions; try each
+      // (none clamp the count, unlike the native right-click dialog that caps large inserts)
+      // and confirm growth so the button never silently no-ops.
+      if (typeof sheet.insertRows === "function") sheet.insertRows(max, n);
+      else if (typeof sheet.insertRowsAfter === "function") sheet.insertRowsAfter(Math.max(0, max - 1), n);
+      else if (typeof sheet.setRowCount === "function") sheet.setRowCount(max + n);
+      if ((sheet.getMaxRows?.() ?? max) <= max && typeof sheet.setRowCount === "function") sheet.setRowCount(max + n);
     } catch {
       /* best-effort */
     }

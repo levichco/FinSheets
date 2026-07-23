@@ -326,8 +326,10 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
   const cmp = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
   const sortOrderFor = (field: string | undefined): "asc" | "desc" | undefined => (field ? spec.dimSettings?.[field]?.order : undefined);
   const sortKeys = (keys: string[], field: string | undefined) => {
+    // Google Sheets sorts pivot row/column groups ascending by default; "desc" flips it.
+    // (Matches the panel's Order select, which shows "Ascending" when unset.)
     const ord = sortOrderFor(field);
-    if (ord) keys.sort((a, c) => (ord === "desc" ? -cmp.compare(a, c) : cmp.compare(a, c)));
+    keys.sort((a, c) => (ord === "desc" ? -cmp.compare(a, c) : cmp.compare(a, c)));
   };
   const finalize = (b: Build): PivotNode => {
     sortKeys(b.childOrder, spec.rows[b.level + 1]); // children are the NEXT row field
