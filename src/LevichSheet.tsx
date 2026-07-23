@@ -408,6 +408,12 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
       const sheet = (api.getActiveWorkbook() as unknown as {
         getActiveSheet?: () => {
           getRange?: (r: number, c: number, numRows?: number, numColumns?: number) => { setValue?: (v: unknown) => void; setValues?: (v: unknown) => unknown } | undefined;
+          getMaxRows?: () => number;
+          getMaxColumns?: () => number;
+          insertRows?: (rowIndex: number, numRows: number) => void;
+          insertColumns?: (columnIndex: number, numColumns: number) => void;
+          setRowCount?: (count: number) => void;
+          setColumnCount?: (count: number) => void;
         } | undefined;
       })?.getActiveSheet?.();
       if (!sheet?.getRange) return;
@@ -416,6 +422,24 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
       const prev = lastPivotRectRef.current;
       const clearRows = Math.max(prev.rows, region.rowCount);
       const clearCols = Math.max(prev.cols, region.columnCount);
+
+      // Grow the pivot sheet to fit BEFORE writing. The sheet is created with a small default
+      // (~60 rows) for an empty pivot; a layout that produces more rows/columns than that (e.g.
+      // grouping by a high-cardinality field like a date) would make `getRange(0,0,clearRows,…)`
+      // exceed the sheet bounds → setValues silently no-ops → a blank pivot. Extend the grid to
+      // clearRows/clearCols (+ a small buffer) so every rendered cell has a home.
+      const growN = (max: number, need: number, at: number, insert?: (i: number, n: number) => void, setCount?: (n: number) => void) => {
+        if (max >= need) return;
+        const add = need - max + 8;
+        if (typeof insert === "function") insert(at, add);
+        else if (typeof setCount === "function") setCount(need + 8);
+      };
+      try {
+        growN(sheet.getMaxRows?.() ?? 0, clearRows, sheet.getMaxRows?.() ?? 0, sheet.insertRows?.bind(sheet), sheet.setRowCount?.bind(sheet));
+        growN(sheet.getMaxColumns?.() ?? 0, clearCols, sheet.getMaxColumns?.() ?? 0, sheet.insertColumns?.bind(sheet), sheet.setColumnCount?.bind(sheet));
+      } catch {
+        /* best-effort growth; getRange below may still clamp */
+      }
 
       // Write the union of the old + new rectangle in a SINGLE bulk `setValues`
       // command (one recalc/render) instead of one Facade `setValue` per cell.
