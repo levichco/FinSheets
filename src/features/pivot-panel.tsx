@@ -190,6 +190,15 @@ const T = {
   bgHover: "var(--color-bg-primary_hover)",
 } as const;
 
+// The exact Tailwind utility classes the host's <Button color="secondary"> and its
+// Select/Input triggers use. These resolve against the host's globally-loaded compiled
+// CSS (the panel mounts in the host DOM), so the buttons render pixel-identically to the
+// design system — inset ring + skeuomorphic shadow, not a flat outline.
+const CLS_SECONDARY_BTN =
+  "inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold cursor-pointer bg-primary text-secondary ring-1 ring-inset ring-primary shadow-xs-skeumorphic transition duration-100 hover:bg-primary_hover hover:text-secondary_hover";
+const CLS_SELECT_TRIGGER =
+  "flex w-full box-border items-center justify-between gap-1.5 rounded-lg px-2.5 py-2 text-xs cursor-pointer bg-primary text-primary ring-1 ring-inset ring-primary shadow-xs transition duration-100 hover:bg-primary_hover";
+
 const drawer: CSSProperties = {
   position: "absolute",
   top: 0,
@@ -220,10 +229,9 @@ const cardHead: CSSProperties = { display: "flex", alignItems: "center", justify
 const cardName: CSSProperties = { fontSize: 13, fontWeight: 600, color: T.textPrimary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "grab" };
 const ctrlLabel: CSSProperties = { fontSize: 11, color: T.textTertiary, marginBottom: 3, display: "block" };
 const ctrlRow: CSSProperties = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 };
-// Secondary <Button> look: white bg, gray ring, neutral text + quaternary icon (no blue).
-const addBtn: CSSProperties = { display: "inline-flex", alignItems: "center", gap: 4, height: 24, padding: "0 8px", borderRadius: 6, border: `1px solid ${T.borderPrimary}`, background: T.bg, color: T.textSecondary, fontSize: 12, fontWeight: 600, cursor: "pointer" };
+// (+Add buttons and dropdown triggers use the host <Button>/Select Tailwind classes —
+// CLS_SECONDARY_BTN / CLS_SELECT_TRIGGER above — for a pixel-exact design-system match.)
 const sectionHead: CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", margin: "14px 0 6px" };
-const selectBtn: CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, width: "100%", height: 30, padding: "0 8px", borderRadius: 6, border: `1px solid ${T.borderPrimary}`, background: T.bg, color: T.textPrimary, fontSize: 12.5, cursor: "pointer", boxSizing: "border-box" };
 const popover: CSSProperties = { position: "absolute", zIndex: 60, minWidth: 160, maxHeight: 260, overflowY: "auto", background: T.bg, border: `1px solid ${T.borderSecondary}`, borderRadius: 8, boxShadow: "0 8px 24px rgba(16,24,40,0.12)", padding: 4, marginTop: 4 };
 const popItem = (active: boolean): CSSProperties => ({ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 6, fontSize: 12.5, color: T.textSecondary, cursor: "pointer", background: active ? T.bgHover : "transparent", whiteSpace: "nowrap" });
 
@@ -240,7 +248,7 @@ function Select<T extends string>({ value, options, onChange, ariaLabel }: { val
   const cur = options.find((o) => o.value === value) ?? options[0];
   return (
     <div ref={ref} style={{ position: "relative" }} onClick={(e) => e.stopPropagation()}>
-      <button type="button" className="lvpv-btn" style={selectBtn} onClick={() => setOpen((o) => !o)} aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open}>
+      <button type="button" className={CLS_SELECT_TRIGGER} onClick={() => setOpen((o) => !o)} aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open}>
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur?.label}</span>
         <ChevronDown size={14} style={{ flexShrink: 0, color: T.fgQuaternary }} />
       </button>
@@ -373,7 +381,7 @@ export function PivotPanel({ fields, spec, onChange, onClose, distinctValues }: 
     return (
       <div ref={filterOpen === field ? filterRef : undefined} style={{ position: "relative" }}>
         <label style={ctrlLabel}>Status</label>
-        <button type="button" className="lvpv-btn" style={selectBtn} onClick={() => setFilterOpen((f) => (f === field ? null : field))} aria-haspopup="dialog">
+        <button type="button" className={CLS_SELECT_TRIGGER} onClick={() => setFilterOpen((f) => (f === field ? null : field))} aria-haspopup="dialog">
           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
           <ChevronDown size={14} style={{ flexShrink: 0, color: T.fgQuaternary }} />
         </button>
@@ -412,7 +420,6 @@ export function PivotPanel({ fields, spec, onChange, onClose, distinctValues }: 
       {/* Scoped hover states so the buttons feel like the host's <Button> (which uses
           bg-primary_hover on hover). Inline styles can't express :hover. */}
       <style>{`
-        .lvpv-btn:hover { background: var(--color-bg-primary_hover); }
         .lvpv-icon-btn:hover { background: var(--color-bg-primary_hover); color: var(--color-text-secondary); }
         .lvpv-item:hover { background: var(--color-bg-primary_hover); }
         .lvpv-link:hover { text-decoration: underline; }
@@ -435,8 +442,8 @@ export function PivotPanel({ fields, spec, onChange, onClose, distinctValues }: 
               <div style={sectionHead}>
                 <span style={areaTitle}>{label}</span>
                 <div ref={addOpen === key ? addRef : undefined} style={{ position: "relative" }}>
-                  <button type="button" className="lvpv-btn" style={addBtn} onClick={() => { setAddOpen((a) => (a === key ? null : key)); setAddQuery(""); }} data-testid={`add-${key}`} aria-label={`Add to ${label}`}>
-                    <Plus size={13} /> Add
+                  <button type="button" className={CLS_SECONDARY_BTN} onClick={() => { setAddOpen((a) => (a === key ? null : key)); setAddQuery(""); }} data-testid={`add-${key}`} aria-label={`Add to ${label}`}>
+                    <Plus size={14} style={{ color: T.fgQuaternary }} /> Add
                   </button>
                   {addOpen === key && (
                     <div style={{ ...popover, right: 0, width: 200 }} role="menu">
