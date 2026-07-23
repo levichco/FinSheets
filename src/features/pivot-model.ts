@@ -455,9 +455,13 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
   };
 
   // Column geometry: col 0 = row labels; then (realCols × values); then value Totals (if showGrand.column).
+  // `perCol` = column-slots per distinct COLUMN value. With no values we still give each column
+  // ONE slot so a Columns field lays out its labels (Google Sheets shows the distinct column
+  // values as headers even before a Value is added) instead of collapsing to nothing.
   const nValues = values.length;
+  const perCol = nValues || 1;
   const dataStart = 1;
-  const totalStart = dataStart + realCols.length * nValues;
+  const totalStart = dataStart + realCols.length * perCol;
   const columnCount = totalStart + (showGrand.column ? nValues : 0);
 
   // Header rows: a column-key header line per column level (if any), then the value labels.
@@ -471,11 +475,11 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
     set(hr, 0, { v: "", s: HEADER_STYLE });
     realCols.forEach((col, ci) => {
       const label = col.split(SEP).join(" / ");
-      // Blank-fill the group's span, then write the column label on the FIRST sub-column of
-      // the group so a multi-value pivot (e.g. Sum | Count under each column) unambiguously
-      // shows which column each value pair belongs to (Excel puts the group label above the span).
-      values.forEach((_, vi) => set(hr, dataStart + ci * nValues + vi, { v: "", s: HEADER_STYLE }));
-      set(hr, dataStart + ci * nValues, { v: label, s: HEADER_STYLE });
+      // Blank-fill the group's span (perCol slots — ≥1 even with no values), then write the
+      // column label on the FIRST sub-column so a multi-value pivot (e.g. Sum | Count under each
+      // column) unambiguously shows which column each value belongs to.
+      for (let vi = 0; vi < perCol; vi++) set(hr, dataStart + ci * perCol + vi, { v: "", s: HEADER_STYLE });
+      set(hr, dataStart + ci * perCol, { v: label, s: HEADER_STYLE });
     });
     headerRows++;
   }
@@ -486,7 +490,7 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
     realCols.forEach((col, ci) => {
       values.forEach((v, vi) => {
         const label = nValues > 1 || colDepth === 0 ? valueLabel(v) : col.split(SEP).join(" / ");
-        set(hr, dataStart + ci * nValues + vi, { v: label, s: HEADER_STYLE });
+        set(hr, dataStart + ci * perCol + vi, { v: label, s: HEADER_STYLE });
       });
     });
     if (showGrand.column) values.forEach((v, vi) => set(hr, totalStart + vi, { v: nValues > 1 ? `Total ${valueLabel(v)}` : "Grand Total", s: HEADER_STYLE }));
@@ -511,7 +515,7 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
       values.forEach((v, vi) => {
         const raw = node ? node.values.get(cellKey(col, vi)) : model.grand.get(cellKey(col, vi));
         const { v: out, pct } = showAsCell(raw, col, vi, node);
-        set(row, dataStart + ci * nValues + vi, { v: out, s: numStyle(pct ? PCT_PATTERN : (v.numFmt ?? NUMBER_PATTERN), total) });
+        set(row, dataStart + ci * perCol + vi, { v: out, s: numStyle(pct ? PCT_PATTERN : (v.numFmt ?? NUMBER_PATTERN), total) });
       });
     });
     if (showGrand.column) {

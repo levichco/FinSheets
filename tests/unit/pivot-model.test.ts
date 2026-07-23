@@ -287,3 +287,23 @@ describe("numeric coercion of imported currency/formatted strings (SUM must not 
     expect(j.values.get(`${ROW_TOTAL}␟0`)).toBeCloseTo(210477.05, 2);
   });
 });
+
+describe("columns without values still lay out their labels (Image #13 fix)", () => {
+  it("renders the distinct COLUMN values as headers even when Values is empty", () => {
+    const src: PivotSource = {
+      fields: ["type", "region"],
+      rows: [
+        { type: "J", region: "West" },
+        { type: "J", region: "East" },
+      ],
+    };
+    const m = computePivotModel(src, { rows: ["type"], columns: ["region"], values: [] });
+    const region = renderPivotModel(m);
+    // 2 distinct columns (East, West) → row-label col + 2 column slots.
+    expect(region.columnCount).toBe(3);
+    // The column labels appear in the first header row (cols 1 and 2).
+    const header0 = region.cells[0] ?? {};
+    const labels = [header0[1], header0[2]].map((c) => (c as { v?: unknown } | undefined)?.v).sort();
+    expect(labels).toEqual(["East", "West"]);
+  });
+})
