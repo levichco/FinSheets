@@ -14,9 +14,9 @@
  * Styling mirrors the package's other panels (white surface, #eaecf0 borders,
  * #101828/#475467 text) — see `find-replace-modal.tsx` / `levich-toolbar.tsx`.
  */
-import { useMemo, useState, type CSSProperties, type DragEvent } from "react";
-import { X } from "@untitledui/icons";
-import type { PivotAggregate, PivotSpec, PivotValueField } from "../core/types";
+import { useEffect, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
+import { ChevronDown, Plus, X } from "@untitledui/icons";
+import type { PivotAggregate, PivotDimSetting, PivotShowAs, PivotSpec, PivotValueField } from "../core/types";
 
 /* ─── Spec model (pure, testable) ─────────────────────────────────────────── */
 
@@ -30,13 +30,35 @@ export const PIVOT_AREAS: Array<{ key: PivotArea; label: string }> = [
   { key: "values", label: "Values" },
 ];
 
+/** The 13 Google-Sheets "Summarise by" functions (internal aggregate ← Google label). */
 export const PIVOT_AGGREGATES: Array<{ value: PivotAggregate; label: string }> = [
-  { value: "sum", label: "Sum" },
-  { value: "count", label: "Count" },
-  { value: "average", label: "Average" },
-  { value: "min", label: "Min" },
-  { value: "max", label: "Max" },
-  { value: "countNumbers", label: "Count Numbers" },
+  { value: "sum", label: "SUM" },
+  { value: "count", label: "COUNTA" },
+  { value: "countNumbers", label: "COUNT" },
+  { value: "countunique", label: "COUNTUNIQUE" },
+  { value: "average", label: "AVERAGE" },
+  { value: "max", label: "MAX" },
+  { value: "min", label: "MIN" },
+  { value: "median", label: "MEDIAN" },
+  { value: "product", label: "PRODUCT" },
+  { value: "stdev", label: "STDEV" },
+  { value: "stdevp", label: "STDEVP" },
+  { value: "var", label: "VAR" },
+  { value: "varp", label: "VARP" },
+];
+
+/** "Show as" options (Google Sheets). */
+export const PIVOT_SHOW_AS: Array<{ value: PivotShowAs; label: string }> = [
+  { value: "default", label: "Default" },
+  { value: "pctOfRow", label: "% of row" },
+  { value: "pctOfCol", label: "% of column" },
+  { value: "pctOfGrand", label: "% of grand total" },
+];
+
+/** Order options for Rows/Columns. */
+const ORDER_OPTS: Array<{ value: "asc" | "desc"; label: string }> = [
+  { value: "asc", label: "Ascending" },
+  { value: "desc", label: "Descending" },
 ];
 
 /** The ordered field names in a given area (values → their `field`). */
@@ -123,6 +145,32 @@ export function aggregateOfValue(spec: PivotSpec, field: string): PivotAggregate
   return spec.values.find((v) => v.field === field)?.aggregate ?? "sum";
 }
 
+/** Change the "Show as" mode of a value field. */
+export function setValueShowAs(spec: PivotSpec, field: string, showAs: PivotShowAs): PivotSpec {
+  return { ...spec, values: spec.values.map((v) => (v.field === field ? { ...v, showAs } : v)) };
+}
+
+/** Patch a Rows/Columns field's per-field settings (Order / Show totals), keyed by field. */
+export function setDimSetting(spec: PivotSpec, field: string, patch: Partial<PivotDimSetting>): PivotSpec {
+  const prev = spec.dimSettings ?? {};
+  return { ...spec, dimSettings: { ...prev, [field]: { ...prev[field], ...patch } } };
+}
+export function dimSettingOf(spec: PivotSpec, field: string): PivotDimSetting {
+  return spec.dimSettings?.[field] ?? {};
+}
+
+/** Set the kept values ("Filter by values") for a filter field. `null`/[] = keep all. */
+export function setFilterInclude(spec: PivotSpec, field: string, include: string[] | null): PivotSpec {
+  return {
+    ...spec,
+    filters: (spec.filters ?? []).map((f) => (f.field === field ? { ...f, include: include && include.length ? include : undefined } : f)),
+  };
+}
+export function filterIncludeOf(spec: PivotSpec, field: string): string[] | null {
+  const f = (spec.filters ?? []).find((x) => x.field === field);
+  return f?.include ?? null;
+}
+
 /* ─── Styles ──────────────────────────────────────────────────────────────── */
 
 const drawer: CSSProperties = {
@@ -130,7 +178,7 @@ const drawer: CSSProperties = {
   top: 0,
   right: 0,
   bottom: 0,
-  width: 320,
+  width: 400,
   background: "#fff",
   borderLeft: "1px solid #eaecf0",
   boxShadow: "-8px 0 24px rgba(16,24,40,0.08)",
@@ -142,42 +190,54 @@ const header: CSSProperties = { display: "flex", alignItems: "center", justifyCo
 const titleStyle: CSSProperties = { fontSize: 15, fontWeight: 600, color: "#101828" };
 const closeBtn: CSSProperties = { display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 8, border: "none", background: "transparent", color: "#475467", cursor: "pointer" };
 const bodyStyle: CSSProperties = { display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflowY: "auto", padding: "0 16px 16px" };
-const sectionLabel: CSSProperties = { fontSize: 11, fontWeight: 700, letterSpacing: 0.3, color: "#98a2b3", margin: "14px 2px 6px" };
 const searchInput: CSSProperties = { width: "100%", height: 34, borderRadius: 8, border: "1px solid #d0d5dd", padding: "0 12px", fontSize: 13, boxSizing: "border-box", outline: "none", color: "#101828" };
-const fieldListStyle: CSSProperties = { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8, maxHeight: 132, overflowY: "auto", paddingBottom: 2 };
-const areaGrid: CSSProperties = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 };
-const chipBase: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "4px 8px",
-  borderRadius: 6,
-  border: "1px solid #eaecf0",
-  background: "#f9fafb",
-  color: "#344054",
-  fontSize: 12.5,
-  cursor: "grab",
-  userSelect: "none",
-  maxWidth: "100%",
-};
 const chipRemove: CSSProperties = { display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: 4, border: "none", background: "transparent", color: "#98a2b3", cursor: "pointer", flexShrink: 0, padding: 0 };
-const aggSelect: CSSProperties = { height: 22, border: "1px solid #d0d5dd", borderRadius: 5, background: "#fff", color: "#475467", fontSize: 11.5, padding: "0 2px", cursor: "pointer", maxWidth: 96 };
 
-const areaBoxBase: CSSProperties = {
-  minHeight: 76,
-  border: "1px dashed #d0d5dd",
-  borderRadius: 8,
-  padding: 8,
-  display: "flex",
-  flexDirection: "column",
-  gap: 6,
-  background: "#fff",
-  transition: "background-color .12s ease, border-color .12s ease",
-};
 const areaTitle: CSSProperties = { fontSize: 11, fontWeight: 600, color: "#667085", textTransform: "uppercase", letterSpacing: 0.3 };
 const emptyHint: CSSProperties = { fontSize: 11.5, color: "#c0c6d0", fontStyle: "italic" };
 
 const DND_MIME = "application/x-levich-pivot-field";
+
+const cardStyle: CSSProperties = { border: "1px solid #eaecf0", borderRadius: 8, background: "#fff", padding: 10, display: "flex", flexDirection: "column", gap: 8 };
+const cardHead: CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 };
+const cardName: CSSProperties = { fontSize: 13, fontWeight: 600, color: "#101828", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "grab" };
+const ctrlLabel: CSSProperties = { fontSize: 11, color: "#667085", marginBottom: 3, display: "block" };
+const ctrlRow: CSSProperties = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 };
+const addBtn: CSSProperties = { display: "inline-flex", alignItems: "center", gap: 4, height: 24, padding: "0 8px", borderRadius: 6, border: "1px solid #d0d5dd", background: "#fff", color: "#155eef", fontSize: 12, fontWeight: 600, cursor: "pointer" };
+const sectionHead: CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", margin: "14px 0 6px" };
+const selectBtn: CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, width: "100%", height: 30, padding: "0 8px", borderRadius: 6, border: "1px solid #d0d5dd", background: "#fff", color: "#101828", fontSize: 12.5, cursor: "pointer", boxSizing: "border-box" };
+const popover: CSSProperties = { position: "absolute", zIndex: 60, minWidth: 160, maxHeight: 260, overflowY: "auto", background: "#fff", border: "1px solid #eaecf0", borderRadius: 8, boxShadow: "0 8px 24px rgba(16,24,40,0.12)", padding: 4, marginTop: 4 };
+const popItem = (active: boolean): CSSProperties => ({ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 6, fontSize: 12.5, color: "#344054", cursor: "pointer", background: active ? "#f9fafb" : "transparent", whiteSpace: "nowrap" });
+
+/** A design-system dropdown (button + popover) — replaces the native <select>. */
+function Select<T extends string>({ value, options, onChange, ariaLabel }: { value: T; options: Array<{ value: T; label: string }>; onChange: (v: T) => void; ariaLabel: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", onDown, true);
+    return () => document.removeEventListener("mousedown", onDown, true);
+  }, [open]);
+  const cur = options.find((o) => o.value === value) ?? options[0];
+  return (
+    <div ref={ref} style={{ position: "relative" }} onClick={(e) => e.stopPropagation()}>
+      <button type="button" style={selectBtn} onClick={() => setOpen((o) => !o)} aria-label={ariaLabel} aria-haspopup="listbox" aria-expanded={open}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cur?.label}</span>
+        <ChevronDown size={14} style={{ flexShrink: 0, color: "#98a2b3" }} />
+      </button>
+      {open && (
+        <div style={popover} role="listbox">
+          {options.map((o) => (
+            <div key={o.value} role="option" aria-selected={o.value === value} style={popItem(o.value === value)} onClick={() => { onChange(o.value); setOpen(false); }}>
+              {o.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ─── Component ───────────────────────────────────────────────────────────── */
 
@@ -190,17 +250,24 @@ export interface PivotPanelProps {
   onChange: (spec: PivotSpec) => void;
   /** Close the drawer (host toggles visibility). */
   onClose?: () => void;
+  /** Distinct values of a field (for the "Filter by values" checklist). */
+  distinctValues?: (field: string) => string[];
 }
 
-export function PivotPanel({ fields, spec, onChange, onClose }: PivotPanelProps) {
-  const [query, setQuery] = useState("");
+// Google-Sheets section order: Rows, Columns, Values, Filters.
+const SECTION_ORDER: Array<{ key: PivotArea; label: string }> = [
+  { key: "rows", label: "Rows" },
+  { key: "columns", label: "Columns" },
+  { key: "values", label: "Values" },
+  { key: "filters", label: "Filters" },
+];
+
+export function PivotPanel({ fields, spec, onChange, onClose, distinctValues }: PivotPanelProps) {
   const [dragField, setDragField] = useState<string | null>(null);
   const [overArea, setOverArea] = useState<PivotArea | null>(null);
-
-  const unusedFields = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return fields.filter((f) => (q ? f.toLowerCase().includes(q) : true));
-  }, [fields, query]);
+  const [addOpen, setAddOpen] = useState<PivotArea | null>(null); // which section's "Add" menu is open
+  const [addQuery, setAddQuery] = useState("");
+  const [filterOpen, setFilterOpen] = useState<string | null>(null); // which filter field's checklist is open
 
   const startDrag = (field: string) => (e: DragEvent) => {
     setDragField(field);
@@ -212,32 +279,114 @@ export function PivotPanel({ fields, spec, onChange, onClose }: PivotPanelProps)
       /* some browsers restrict custom MIME in tests — the ref fallback covers it */
     }
   };
-  const endDrag = () => {
-    setDragField(null);
-    setOverArea(null);
-  };
-
-  const fieldFrom = (e: DragEvent): string | null => {
-    const fromData = e.dataTransfer.getData(DND_MIME) || e.dataTransfer.getData("text/plain");
-    return fromData || dragField;
-  };
-
+  const endDrag = () => { setDragField(null); setOverArea(null); };
+  const fieldFrom = (e: DragEvent): string | null => e.dataTransfer.getData(DND_MIME) || e.dataTransfer.getData("text/plain") || dragField;
   const dropOnArea = (area: PivotArea, index?: number) => (e: DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     const field = fieldFrom(e);
     endDrag();
-    if (!field) return;
-    onChange(placeField(spec, field, area, index));
+    if (field) onChange(placeField(spec, field, area, index));
   };
-
   const allowDrop = (area: PivotArea) => (e: DragEvent) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     if (overArea !== area) setOverArea(area);
   };
-
   const removeChip = (field: string) => onChange(removeField(spec, field));
+
+  const addRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!addOpen) return;
+    const onDown = (e: MouseEvent) => { if (addRef.current && !addRef.current.contains(e.target as Node)) { setAddOpen(null); setAddQuery(""); } };
+    document.addEventListener("mousedown", onDown, true);
+    return () => document.removeEventListener("mousedown", onDown, true);
+  }, [addOpen]);
+
+  const filterRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!filterOpen) return;
+    const onDown = (e: MouseEvent) => { if (filterRef.current && !filterRef.current.contains(e.target as Node)) setFilterOpen(null); };
+    document.addEventListener("mousedown", onDown, true);
+    return () => document.removeEventListener("mousedown", onDown, true);
+  }, [filterOpen]);
+
+  const addableFields = (area: PivotArea): string[] => {
+    const q = addQuery.trim().toLowerCase();
+    const inArea = new Set(fieldsInArea(spec, area));
+    return fields.filter((f) => !inArea.has(f) && (q ? f.toLowerCase().includes(q) : true));
+  };
+
+  const dimCard = (field: string): ReactNode => {
+    const s = dimSettingOf(spec, field);
+    return (
+      <div style={ctrlRow}>
+        <div>
+          <label style={ctrlLabel}>Order</label>
+          <Select value={s.order ?? "asc"} options={ORDER_OPTS} ariaLabel={`Order for ${field}`} onChange={(v) => onChange(setDimSetting(spec, field, { order: v }))} />
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "#344054", alignSelf: "flex-end", height: 30 }}>
+          <input type="checkbox" checked={s.showTotals ?? true} onChange={(e) => onChange(setDimSetting(spec, field, { showTotals: e.target.checked }))} />
+          Show totals
+        </label>
+      </div>
+    );
+  };
+  const valueCard = (field: string): ReactNode => {
+    const v = spec.values.find((x) => x.field === field);
+    return (
+      <div style={ctrlRow}>
+        <div>
+          <label style={ctrlLabel}>Summarize by</label>
+          <Select value={aggregateOfValue(spec, field)} options={PIVOT_AGGREGATES} ariaLabel={`Summarize ${field}`} onChange={(a) => onChange(setValueAggregate(spec, field, a))} />
+        </div>
+        <div>
+          <label style={ctrlLabel}>Show as</label>
+          <Select value={v?.showAs ?? "default"} options={PIVOT_SHOW_AS} ariaLabel={`Show ${field} as`} onChange={(m) => onChange(setValueShowAs(spec, field, m))} />
+        </div>
+      </div>
+    );
+  };
+  const filterCard = (field: string): ReactNode => {
+    const include = filterIncludeOf(spec, field);
+    const all = distinctValues?.(field) ?? [];
+    const kept = include ?? all;
+    const label = !include || include.length === all.length ? "Showing all items" : `Showing ${include.length} of ${all.length}`;
+    return (
+      <div ref={filterOpen === field ? filterRef : undefined} style={{ position: "relative" }}>
+        <label style={ctrlLabel}>Status</label>
+        <button type="button" style={selectBtn} onClick={() => setFilterOpen((f) => (f === field ? null : field))} aria-haspopup="dialog">
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+          <ChevronDown size={14} style={{ flexShrink: 0, color: "#98a2b3" }} />
+        </button>
+        {filterOpen === field && (
+          <div style={{ ...popover, width: 220, maxHeight: 300 }} role="dialog" aria-label={`Filter ${field}`}>
+            <div style={{ display: "flex", gap: 10, padding: "4px 8px 6px", fontSize: 12, fontWeight: 600 }}>
+              <button type="button" style={{ color: "#155eef", background: "none", border: "none", cursor: "pointer", padding: 0 }} onClick={() => onChange(setFilterInclude(spec, field, null))}>Select all</button>
+              <button type="button" style={{ color: "#155eef", background: "none", border: "none", cursor: "pointer", padding: 0 }} onClick={() => onChange(setFilterInclude(spec, field, []))}>Clear</button>
+            </div>
+            {all.length === 0 && <div style={{ ...emptyHint, padding: "6px 10px" }}>No values.</div>}
+            {all.map((val) => {
+              const checked = kept.includes(val);
+              return (
+                <label key={val} style={popItem(false)}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => {
+                      const next = checked ? kept.filter((x) => x !== val) : [...kept, val];
+                      onChange(setFilterInclude(spec, field, next.length === all.length ? null : next));
+                    }}
+                  />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{val === "" ? "(blank)" : val}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <aside style={drawer} role="dialog" aria-label="Pivot table editor">
@@ -251,83 +400,58 @@ export function PivotPanel({ fields, spec, onChange, onClose }: PivotPanelProps)
       </header>
 
       <div style={bodyStyle}>
-        <div style={sectionLabel}>FIELDS</div>
-        <input style={searchInput} placeholder="Search fields" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search fields" />
-        <div style={fieldListStyle}>
-          {unusedFields.map((field) => {
-            const area = areaOfField(spec, field);
-            return (
-              <span
-                key={field}
-                draggable
-                onDragStart={startDrag(field)}
-                onDragEnd={endDrag}
-                title={area ? `${field} — in ${area}` : field}
-                style={{ ...chipBase, opacity: area ? 0.55 : 1, borderColor: area ? "#c9cfd8" : "#eaecf0" }}
-                data-testid={`field-chip-${field}`}
-              >
-                {field}
-              </span>
-            );
-          })}
-          {unusedFields.length === 0 && <span style={emptyHint}>No fields match your search.</span>}
-        </div>
-
-        <div style={sectionLabel}>AREAS</div>
-        <div style={areaGrid}>
-          {PIVOT_AREAS.map(({ key, label }) => {
-            const placed = fieldsInArea(spec, key);
-            const active = overArea === key;
-            return (
+        {SECTION_ORDER.map(({ key, label }) => {
+          const placed = fieldsInArea(spec, key);
+          const active = overArea === key;
+          return (
+            <div key={key} data-testid={`area-${key}`}>
+              <div style={sectionHead}>
+                <span style={areaTitle}>{label}</span>
+                <div ref={addOpen === key ? addRef : undefined} style={{ position: "relative" }}>
+                  <button type="button" style={addBtn} onClick={() => { setAddOpen((a) => (a === key ? null : key)); setAddQuery(""); }} data-testid={`add-${key}`} aria-label={`Add to ${label}`}>
+                    <Plus size={13} /> Add
+                  </button>
+                  {addOpen === key && (
+                    <div style={{ ...popover, right: 0, width: 200 }} role="menu">
+                      <input style={{ ...searchInput, height: 30, margin: "2px 2px 6px" }} placeholder="Search fields" value={addQuery} autoFocus onChange={(e) => setAddQuery(e.target.value)} aria-label="Search fields to add" />
+                      {addableFields(key).map((f) => (
+                        <div key={f} role="menuitem" style={popItem(false)} onClick={() => { onChange(placeField(spec, f, key)); setAddOpen(null); setAddQuery(""); }} data-testid={`add-field-${key}-${f}`}>
+                          {f}
+                        </div>
+                      ))}
+                      {addableFields(key).length === 0 && <div style={{ ...emptyHint, padding: "6px 10px" }}>No fields.</div>}
+                    </div>
+                  )}
+                </div>
+              </div>
               <div
-                key={key}
                 onDragOver={allowDrop(key)}
                 onDragLeave={() => setOverArea((a) => (a === key ? null : a))}
                 onDrop={dropOnArea(key)}
-                style={{ ...areaBoxBase, background: active ? "#fef3c7" : "#fff", borderColor: active ? "#fde68a" : "#d0d5dd" }}
-                data-testid={`area-${key}`}
-                aria-label={label}
+                style={{ display: "flex", flexDirection: "column", gap: 8, minHeight: 8, padding: active ? 6 : 0, borderRadius: 8, background: active ? "#fef3c7" : "transparent", border: active ? "1px dashed #fde68a" : "1px solid transparent" }}
               >
-                <span style={areaTitle}>{label}</span>
+                {placed.length === 0 && <span style={emptyHint}>No fields — use Add or drag a field here.</span>}
                 {placed.map((field, i) => (
-                  <span
+                  <div
                     key={field}
-                    draggable
-                    onDragStart={startDrag(field)}
-                    onDragEnd={endDrag}
-                    // Drop BEFORE this chip → reorder within the area.
+                    style={cardStyle}
                     onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
                     onDrop={dropOnArea(key, i)}
-                    style={{ ...chipBase, background: "#fff", cursor: "grab", justifyContent: "space-between", width: "100%", boxSizing: "border-box" }}
                     data-testid={`chip-${key}-${field}`}
                   >
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{field}</span>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                      {key === "values" && (
-                        <select
-                          value={aggregateOfValue(spec, field)}
-                          onChange={(e) => onChange(setValueAggregate(spec, field, e.target.value as PivotAggregate))}
-                          onClick={(e) => e.stopPropagation()}
-                          style={aggSelect}
-                          aria-label={`Aggregate for ${field}`}
-                          data-testid={`agg-${field}`}
-                        >
-                          {PIVOT_AGGREGATES.map((a) => (
-                            <option key={a.value} value={a.value}>{a.label}</option>
-                          ))}
-                        </select>
-                      )}
-                      <button type="button" aria-label={`Remove ${field}`} onClick={() => removeChip(field)} style={chipRemove}>
-                        <X size={12} />
-                      </button>
-                    </span>
-                  </span>
+                    <div style={cardHead}>
+                      <span style={cardName} draggable onDragStart={startDrag(field)} onDragEnd={endDrag} title={field}>{field}</span>
+                      <button type="button" aria-label={`Remove ${field}`} onClick={() => removeChip(field)} style={chipRemove}><X size={13} /></button>
+                    </div>
+                    {(key === "rows" || key === "columns") && dimCard(field)}
+                    {key === "values" && valueCard(field)}
+                    {key === "filters" && filterCard(field)}
+                  </div>
                 ))}
-                {placed.length === 0 && <span style={emptyHint}>Drop fields here</span>}
               </div>
-            );
-          })}
-        </div>
+            </div>
+          );
+        })}
       </div>
     </aside>
   );

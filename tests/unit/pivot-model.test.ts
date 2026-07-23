@@ -218,3 +218,32 @@ describe("renderPivotModel", () => {
     expect(collapsed.rowCount).toBeLessThan(full.rowCount); // West's children (A,B) + subtotal are hidden
   });
 });
+
+describe("computePivotModel — the extra Google aggregates + Show-as", () => {
+  const src = {
+    fields: ["g", "x"],
+    rows: [
+      { g: "A", x: 2 },
+      { g: "A", x: 4 },
+      { g: "A", x: 4 },
+      { g: "B", x: 10 },
+    ],
+  };
+  const model = (agg: string) => computePivotModel(src as never, { rows: ["g"], columns: [], values: [{ field: "x", aggregate: agg as never }] });
+  const total = (m: ReturnType<typeof computePivotModel>, key: string) => m.rowTree.find((n) => n.key === key)!.values.get(`${ROW_TOTAL}␟0`);
+
+  it("MEDIAN", () => { const m = model("median"); expect(total(m, "A")).toBe(4); }); // [2,4,4] → 4
+  it("COUNTUNIQUE", () => { const m = model("countunique"); expect(total(m, "A")).toBe(2); }); // {2,4}
+  it("PRODUCT", () => { const m = model("product"); expect(total(m, "A")).toBe(32); }); // 2*4*4
+  it("STDEVP (population)", () => { const m = model("stdevp"); expect(total(m, "A")).toBeCloseTo(0.9428, 3); });
+  it("VAR (sample)", () => { const m = model("var"); expect(total(m, "A")).toBeCloseTo(4 / 3, 6); });
+  it("STDEV of a single value is 0 (n<2)", () => { const m = model("stdev"); expect(total(m, "B")).toBe(0); });
+
+  it("Show-as % of grand total re-bases each row's total", () => {
+    const m = computePivotModel(src as never, { rows: ["g"], columns: [], values: [{ field: "x", aggregate: "sum", showAs: "pctOfGrand" }] });
+    const rendered = renderPivotModel(m);
+    // A sum=10, B sum=10, grand=20 → each row total is 0.5 (50%).
+    const cellVals = Object.values(rendered.cells).flatMap((row) => Object.values(row)).map((c) => c?.v);
+    expect(cellVals).toContain(0.5);
+  });
+});

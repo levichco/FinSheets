@@ -20,24 +20,43 @@ export const ROW_TOTAL = "\u0000TOTAL";
 
 function aggregate(values: number[], agg: PivotAggregate): number {
   const nums = values;
+  const f = nums.filter(Number.isFinite);
   switch (agg) {
     case "count":
       return nums.length;
     case "countNumbers":
-      return nums.filter((n) => Number.isFinite(n)).length;
-    case "average": {
-      const f = nums.filter((n) => Number.isFinite(n));
+      return f.length;
+    case "countunique":
+      return new Set(f).size;
+    case "average":
       return f.length ? f.reduce((s, x) => s + x, 0) / f.length : 0;
-    }
-    case "min": {
+    case "min":
       // Exclude non-numbers (text / blanks) like Excel's MIN — else one stray "N/A"
       // poisons the whole group to NaN.
-      const f = nums.filter(Number.isFinite);
       return f.length ? Math.min(...f) : 0;
-    }
-    case "max": {
-      const f = nums.filter(Number.isFinite);
+    case "max":
       return f.length ? Math.max(...f) : 0;
+    case "median": {
+      if (!f.length) return 0;
+      const s = [...f].sort((x, y) => x - y);
+      const m = s.length >> 1;
+      return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+    }
+    case "product":
+      return f.length ? f.reduce((p, x) => p * x, 1) : 0;
+    case "var":
+    case "stdev": {
+      if (f.length < 2) return 0;
+      const mean = f.reduce((s, x) => s + x, 0) / f.length;
+      const v = f.reduce((s, x) => s + (x - mean) ** 2, 0) / (f.length - 1);
+      return agg === "var" ? v : Math.sqrt(v);
+    }
+    case "varp":
+    case "stdevp": {
+      if (!f.length) return 0;
+      const mean = f.reduce((s, x) => s + x, 0) / f.length;
+      const v = f.reduce((s, x) => s + (x - mean) ** 2, 0) / f.length;
+      return agg === "varp" ? v : Math.sqrt(v);
     }
     case "sum":
     default:
@@ -57,32 +76,56 @@ function aggregate(values: number[], agg: PivotAggregate): number {
    at ~O(rows × depth) instead of ~O(rows × depth × cols × values). */
 interface Acc {
   sum: number; // Σ of finite values (for "sum" / "average").
-  n: number; // total observations (for "count").
-  fn: number; // finite-value count (for "countNumbers" / "average").
+  n: number; // total observations (for "count"/COUNTA).
+  fn: number; // finite-value count (for "countNumbers"/COUNT / "average").
   min: number; // running min over finite values (Infinity if none seen).
   max: number; // running max over finite values (-Infinity if none seen).
+  sq: number; // Σx² over finite values (for STDEV/STDEVP/VAR/VARP — mergeable).
+  prod: number; // Πx over finite values (for PRODUCT — mergeable; identity 1).
+  vals?: number[]; // finite values, tracked ONLY when a value field uses MEDIAN.
+  uniq?: Set<string>; // distinct non-empty raw values, ONLY when a field uses COUNTUNIQUE.
 }
-const newAcc = (): Acc => ({ sum: 0, n: 0, fn: 0, min: Infinity, max: -Infinity });
+const newAcc = (needVals = false, needUniq = false): Acc => ({
+  sum: 0,
+  n: 0,
+  fn: 0,
+  min: Infinity,
+  max: -Infinity,
+  sq: 0,
+  prod: 1,
+  vals: needVals ? [] : undefined,
+  uniq: needUniq ? new Set<string>() : undefined,
+});
 
-/** Fold one raw value into an accumulator. */
-function pushAcc(a: Acc, x: number): void {
+/** Fold one RAW value into an accumulator (keeps distinctness for COUNTUNIQUE + the
+ *  value list for MEDIAN; everything else is O(1) sufficient statistics). */
+function pushAcc(a: Acc, raw: unknown): void {
   a.n += 1;
+  if (a.uniq && raw != null && String(raw).trim() !== "") a.uniq.add(String(raw));
+  const x = typeof raw === "number" ? raw : Number(raw);
   if (Number.isFinite(x)) {
     a.sum += x;
     a.fn += 1;
+    a.sq += x * x;
+    a.prod *= x;
     if (x < a.min) a.min = x;
     if (x > a.max) a.max = x;
+    a.vals?.push(x);
   }
 }
 
-/** Merge `src` INTO `dst` in O(1) — associative + commutative, so roll-up order
- *  doesn't matter and a parent = merge of its children = merge of all its leaves. */
+/** Merge `src` INTO `dst` in O(1) (O(k) when tracking median/uniq) — associative +
+ *  commutative, so roll-up order doesn't matter and a parent = merge of its children. */
 function mergeAcc(dst: Acc, src: Acc): void {
   dst.sum += src.sum;
   dst.n += src.n;
   dst.fn += src.fn;
+  dst.sq += src.sq;
+  dst.prod *= src.prod;
   if (src.min < dst.min) dst.min = src.min;
   if (src.max > dst.max) dst.max = src.max;
+  if (dst.vals && src.vals) for (const v of src.vals) dst.vals.push(v);
+  if (dst.uniq && src.uniq) for (const u of src.uniq) dst.uniq.add(u);
 }
 
 /** Read the final aggregate out of an accumulator (matches `aggregate()` exactly). */
@@ -92,12 +135,34 @@ function readAcc(a: Acc, agg: PivotAggregate): number {
       return a.n;
     case "countNumbers":
       return a.fn;
+    case "countunique":
+      return a.uniq ? a.uniq.size : 0;
     case "average":
       return a.fn ? a.sum / a.fn : 0;
     case "min":
       return a.fn ? a.min : 0;
     case "max":
       return a.fn ? a.max : 0;
+    case "median": {
+      if (!a.vals || !a.vals.length) return 0;
+      const s = [...a.vals].sort((x, y) => x - y);
+      const m = s.length >> 1;
+      return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+    }
+    case "product":
+      return a.fn ? a.prod : 0;
+    case "var":
+    case "stdev": {
+      if (a.fn < 2) return 0;
+      const v = (a.sq - (a.sum * a.sum) / a.fn) / (a.fn - 1); // sample variance
+      return agg === "var" ? v : Math.sqrt(Math.max(0, v));
+    }
+    case "varp":
+    case "stdevp": {
+      if (a.fn < 1) return 0;
+      const v = (a.sq - (a.sum * a.sum) / a.fn) / a.fn; // population variance
+      return agg === "varp" ? v : Math.sqrt(Math.max(0, v));
+    }
     case "sum":
     default:
       return a.sum;
@@ -109,19 +174,21 @@ export function valueLabel(v: PivotValueField): string {
   if (v.label) return v.label;
   const verb: Record<PivotAggregate, string> = {
     sum: "Sum",
-    count: "Count",
-    countNumbers: "Count",
+    count: "COUNTA",
+    countNumbers: "COUNT",
+    countunique: "COUNTUNIQUE",
     average: "Average",
     min: "Min",
     max: "Max",
+    median: "Median",
+    product: "Product",
+    stdev: "STDEV",
+    stdevp: "STDEVP",
+    var: "VAR",
+    varp: "VARP",
   };
   return `${verb[v.aggregate]} of ${v.field}`;
 }
-
-const num = (x: unknown): number => {
-  const n = typeof x === "number" ? x : Number(x);
-  return Number.isFinite(n) ? n : NaN;
-};
 
 /** Compute the full pivot tree from a source + spec. */
 export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotModel {
@@ -132,6 +199,15 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
   const rows = source.rows.filter((r) => filters.every((f) => !f.include || f.include.includes(String(r[f.field] ?? ""))));
 
   const nValues = values.length;
+  // MEDIAN needs the value multiset + COUNTUNIQUE the distinct set — track them per value
+  // field ONLY when used, so the fast O(1) roll-up is unaffected for the common aggregates.
+  const needVals = values.map((v) => v.aggregate === "median");
+  const needUniq = values.map((v) => v.aggregate === "countunique");
+  const mkGroup = (): Acc[] => {
+    const g = new Array<Acc>(nValues);
+    for (let vi = 0; vi < nValues; vi++) g[vi] = newAcc(needVals[vi], needUniq[vi]);
+    return g;
+  };
   // Cell key: `${colPath}${SEP}${vi}`. The row Total column uses a DEDICATED sentinel
   // colPath (ROW_TOTAL) that can never equal a real column path — including the ""
   // path produced by a column field whose VALUE is blank — so the two never collide.
@@ -164,11 +240,10 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
     if (!byCol) rawAcc.set(rl.path, (byCol = new Map()));
     let grp = byCol.get(cl.path);
     if (!grp) {
-      grp = new Array(nValues);
-      for (let vi = 0; vi < nValues; vi++) grp[vi] = newAcc();
+      grp = mkGroup();
       byCol.set(cl.path, grp);
     }
-    for (let vi = 0; vi < nValues; vi++) pushAcc(grp[vi], num(r[values[vi].field]));
+    for (let vi = 0; vi < nValues; vi++) pushAcc(grp[vi], r[values[vi].field]);
   }
 
   const colLeaves = [...colLeafSet.keys()];
@@ -182,8 +257,7 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
   // wrongly dropped). Always built; render decides whether to show the Total column.
   const rowTotalAcc = new Map<string, AccGroup>();
   for (const [rl, byCol] of rawAcc) {
-    const tot: AccGroup = new Array(nValues);
-    for (let vi = 0; vi < nValues; vi++) tot[vi] = newAcc();
+    const tot: AccGroup = mkGroup();
     for (const grp of byCol.values()) for (let vi = 0; vi < nValues; vi++) mergeAcc(tot[vi], grp[vi]);
     rowTotalAcc.set(rl, tot);
   }
@@ -236,8 +310,7 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
   const ensureGroup = (m: Map<string, AccGroup>, colPath: string): AccGroup => {
     let g = m.get(colPath);
     if (!g) {
-      g = new Array(nValues);
-      for (let vi = 0; vi < nValues; vi++) g[vi] = newAcc();
+      g = mkGroup();
       m.set(colPath, g);
     }
     return g;
@@ -249,7 +322,15 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
 
   // Bottom-up finalize: a parent's accumulators are the O(children) merge of its
   // children's — descendants are NEVER re-scanned.
+  // "Order" (asc/desc) per dimension field — sort a node's children by their label.
+  const cmp = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  const sortOrderFor = (field: string | undefined): "asc" | "desc" | undefined => (field ? spec.dimSettings?.[field]?.order : undefined);
+  const sortKeys = (keys: string[], field: string | undefined) => {
+    const ord = sortOrderFor(field);
+    if (ord) keys.sort((a, c) => (ord === "desc" ? -cmp.compare(a, c) : cmp.compare(a, c)));
+  };
   const finalize = (b: Build): PivotNode => {
+    sortKeys(b.childOrder, spec.rows[b.level + 1]); // children are the NEXT row field
     const children = b.childOrder.map((k) => finalize(b.children.get(k)!));
     // Seed this node's accumulators from its own direct leaves (true leaves only).
     for (const leaf of b.leaves) {
@@ -270,6 +351,7 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
     for (let vi = 0; vi < nValues; vi++) { const k = cellKey(ROW_TOTAL, vi); if (!node.values.has(k)) node.values.set(k, aggregate([], values[vi].aggregate)); }
     return node;
   };
+  sortKeys(rootOrder, spec.rows[0]); // top-level row groups
   const rootBuilds = rootOrder.map((k) => rootChildren.get(k)!);
   const rowTree = rootBuilds.map((b) => finalize(b));
 
@@ -377,17 +459,30 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
 
   // Body rows: walk the row tree depth-first, emitting a row per node (+ subtotal when it has children).
   let r = headerRows;
+  // "Show as": re-express a raw cell as a % of its row total / column total / grand total.
+  const PCT_PATTERN = "0.0%";
+  const showAsCell = (raw: number | undefined, colPath: string, vi: number, node: PivotNode | null): { v: number; pct: boolean } => {
+    const mode = values[vi].showAs ?? "default";
+    if (mode === "default" || raw == null) return { v: raw ?? 0, pct: false };
+    const rowTot = (node ? node.values.get(cellKey(ROW_TOTAL, vi)) : model.grand.get(cellKey(ROW_TOTAL, vi))) ?? 0;
+    const colTot = model.grand.get(cellKey(colPath, vi)) ?? 0;
+    const grandTot = model.grand.get(cellKey(ROW_TOTAL, vi)) ?? 0;
+    const den = mode === "pctOfRow" ? rowTot : mode === "pctOfCol" ? colTot : grandTot;
+    return { v: den ? raw / den : 0, pct: true };
+  };
   const emitValueCells = (row: number, node: PivotNode | null, total: boolean) => {
     realCols.forEach((col, ci) => {
       values.forEach((v, vi) => {
-        const val = node ? node.values.get(cellKey(col, vi)) : model.grand.get(cellKey(col, vi));
-        set(row, dataStart + ci * nValues + vi, { v: val ?? 0, s: numStyle(v.numFmt ?? NUMBER_PATTERN, total) });
+        const raw = node ? node.values.get(cellKey(col, vi)) : model.grand.get(cellKey(col, vi));
+        const { v: out, pct } = showAsCell(raw, col, vi, node);
+        set(row, dataStart + ci * nValues + vi, { v: out, s: numStyle(pct ? PCT_PATTERN : (v.numFmt ?? NUMBER_PATTERN), total) });
       });
     });
     if (showGrand.column) {
       values.forEach((v, vi) => {
-        const val = node ? node.values.get(cellKey(ROW_TOTAL, vi)) : model.grand.get(cellKey(ROW_TOTAL, vi));
-        set(row, totalStart + vi, { v: val ?? 0, s: numStyle(v.numFmt ?? NUMBER_PATTERN, true) });
+        const raw = node ? node.values.get(cellKey(ROW_TOTAL, vi)) : model.grand.get(cellKey(ROW_TOTAL, vi));
+        const { v: out, pct } = showAsCell(raw, ROW_TOTAL, vi, node);
+        set(row, totalStart + vi, { v: out, s: numStyle(pct ? PCT_PATTERN : (v.numFmt ?? NUMBER_PATTERN), true) });
       });
     }
   };
@@ -403,7 +498,9 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
       r++;
       if (hasChildren && !isCollapsed) {
         walk(node.children);
-        if (showRowSubtotals) {
+        // Per-level "Show totals" (dimSettings), falling back to the global default.
+        const showThisTotal = spec.dimSettings?.[spec.rows[node.level]]?.showTotals ?? showRowSubtotals;
+        if (showThisTotal) {
           set(r, 0, { v: `${node.key} Total`, s: indentStyle(node.level, TOTAL_LABEL_STYLE) });
           emitValueCells(r, node, true);
           r++;

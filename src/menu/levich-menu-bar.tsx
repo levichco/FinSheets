@@ -796,8 +796,11 @@ export function LevichMenuBar({ api, onDownload, onOpenFind, onSave, onNew, onIm
       const t = ev.target as HTMLElement;
       if (!t.closest("[data-levich-menu]") && !t.closest("[data-levich-menubar]")) setOpenMenu(null);
     };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
+    // Capture phase: Univer's canvas stops event propagation on a cell mousedown, so a
+    // bubble-phase document listener never fires — the menu would stay open when you click
+    // a cell. Capturing on the way DOWN dismisses it before Univer swallows the event.
+    document.addEventListener("mousedown", h, true);
+    return () => document.removeEventListener("mousedown", h, true);
   }, [openMenu]);
 
   return (

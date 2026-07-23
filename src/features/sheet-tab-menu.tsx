@@ -384,7 +384,7 @@ export function SheetTabMenu({ api, onCopyToExisting }: SheetTabMenuProps) {
 
   return createPortal(
     <div ref={ref} style={{ ...panel, left, bottom: bottomPx }} onContextMenu={(e) => e.preventDefault()}>
-      <Row label="Delete" danger disabled={!canDelete} onClick={del} />
+      <Row label="Delete" disabled={!canDelete} onClick={del} />
       <Row label="Duplicate" onClick={duplicate} />
       <div style={{ position: "relative" }} onMouseEnter={() => { setCopyOpen(true); setColorOpen(false); }} onMouseLeave={() => setCopyOpen(false)}>
         <Row label="Copy to">

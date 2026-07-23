@@ -12,6 +12,8 @@ import { fireEvent, render, screen } from "@testing-library/react";
 // on behavior, not the icon set.
 vi.mock("@untitledui/icons", () => ({
   X: (props: Record<string, unknown>) => <span data-icon="x" {...props} />,
+  Plus: (props: Record<string, unknown>) => <span data-icon="plus" {...props} />,
+  ChevronDown: (props: Record<string, unknown>) => <span data-icon="chevron" {...props} />,
 }));
 import {
   PivotPanel,
@@ -82,32 +84,24 @@ describe("pivot-panel spec helpers", () => {
 describe("<PivotPanel />", () => {
   const fields = ["Region", "Quarter", "Amount"];
 
-  it("renders the field chips and the four drop areas", () => {
+  it("renders the four sections each with an Add button", () => {
     render(<PivotPanel fields={fields} spec={baseSpec} onChange={() => {}} />);
-    for (const f of fields) expect(screen.getByTestId(`field-chip-${f}`)).toBeTruthy();
-    for (const a of ["filters", "columns", "rows", "values"]) expect(screen.getByTestId(`area-${a}`)).toBeTruthy();
+    for (const a of ["filters", "columns", "rows", "values"]) {
+      expect(screen.getByTestId(`area-${a}`)).toBeTruthy();
+      expect(screen.getByTestId(`add-${a}`)).toBeTruthy();
+    }
   });
 
-  it("fires onChange with a placed field when one is dropped into an area", () => {
+  it("adds a field to a section via the Add menu", () => {
     const onChange = vi.fn();
     render(<PivotPanel fields={fields} spec={baseSpec} onChange={onChange} />);
-
-    // Simulate an HTML5 drop of "Quarter" onto the Columns area.
-    const data = new Map<string, string>();
-    const dataTransfer = {
-      effectAllowed: "move",
-      dropEffect: "move",
-      setData: (k: string, v: string) => data.set(k, v),
-      getData: (k: string) => data.get(k) ?? "",
-    };
-    fireEvent.dragStart(screen.getByTestId("field-chip-Quarter"), { dataTransfer });
-    fireEvent.drop(screen.getByTestId("area-columns"), { dataTransfer });
-
+    fireEvent.click(screen.getByTestId("add-columns")); // open the Columns Add menu
+    fireEvent.click(screen.getByTestId("add-field-columns-Quarter")); // pick Quarter
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange.mock.calls[0][0].columns).toEqual(["Quarter"]);
   });
 
-  it("fires onChange removing a field when its chip × is clicked", () => {
+  it("fires onChange removing a field when its card × is clicked", () => {
     const onChange = vi.fn();
     render(<PivotPanel fields={fields} spec={baseSpec} onChange={onChange} />);
     fireEvent.click(screen.getByLabelText("Remove Region"));
@@ -115,11 +109,21 @@ describe("<PivotPanel />", () => {
     expect(onChange.mock.calls[0][0].rows).toEqual([]);
   });
 
-  it("changes the aggregate when the Values dropdown changes", () => {
+  it("changes the aggregate via the Summarize-by DS dropdown", () => {
     const onChange = vi.fn();
     render(<PivotPanel fields={fields} spec={baseSpec} onChange={onChange} />);
-    fireEvent.change(screen.getByLabelText("Aggregate for Amount"), { target: { value: "average" } });
+    fireEvent.click(screen.getByLabelText("Summarize Amount")); // open the Select
+    fireEvent.click(screen.getByText("AVERAGE")); // pick AVERAGE
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange.mock.calls[0][0].values[0].aggregate).toBe("average");
+  });
+
+  it("shows a value's Show-as options", () => {
+    const onChange = vi.fn();
+    render(<PivotPanel fields={fields} spec={baseSpec} onChange={onChange} />);
+    fireEvent.click(screen.getByLabelText("Show Amount as")); // open Show-as Select
+    fireEvent.click(screen.getByText("% of grand total"));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0][0].values[0].showAs).toBe("pctOfGrand");
   });
 });

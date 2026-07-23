@@ -99,6 +99,7 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
   // clear stale cells before each redraw.
   const [pivotSpec, setPivotSpec] = useState<PivotSpec | null>(() => (pivotInteractive ? pivotInteractive.initialSpec ?? defaultPivotSpec(pivotInteractive.source) : null));
   const [pivotOpen, setPivotOpen] = useState<boolean>(!!pivotInteractive);
+  const [addRowsN, setAddRowsN] = useState<number>(1000); // "Add N more rows at the bottom" input
   const specRef = useRef<PivotSpec | null>(pivotSpec);
   specRef.current = pivotSpec;
   const lastPivotRectRef = useRef<{ rows: number; cols: number }>({ rows: 0, cols: 0 });
@@ -465,6 +466,23 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
     [],
   );
 
+  // "Add N more rows at the bottom" — Google-Sheets-style row growth. Routes through the
+  // Facade `insertRows` (which has NO count clamp, unlike Univer's native right-click dialog
+  // that caps large inserts), so adding 10,000 rows adds exactly 10,000.
+  const addRowsAtBottom = () => {
+    const n = Math.max(1, Math.floor(Number(addRowsN)) || 0);
+    try {
+      const sheet = apiRef.current?.getActiveWorkbook()?.getActiveSheet() as unknown as
+        | { getMaxRows?: () => number; insertRows?: (rowIndex: number, numRows: number) => void }
+        | undefined;
+      const max = sheet?.getMaxRows?.() ?? 0;
+      sheet?.insertRows?.(max, n);
+    } catch {
+      /* best-effort */
+    }
+  };
+  const showAddRows = !readOnly && !pivotInteractive && !pivot;
+
   return (
     <div className={className ?? "levich-sheet"} style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", minHeight: 0 }}>
       <LevichMenuBar api={toolbarApi} onOpenFind={() => setFindOpen(true)} onImport={onImport} onImportFile={onImportFile} onSave={onSave} onDownload={onDownload} onNew={onNew} onMakeCopy={onMakeCopy} onRename={onRename} onHideActiveSheet={onHideActiveSheet} onShowSheet={onShowSheet} hiddenSheetList={hiddenSheetList} canHideActiveSheet={canHideActiveSheet} onInsertPivot={onInsertPivot} />
@@ -480,6 +498,14 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
           <PivotPanel
             fields={pivotInteractive.source.fields}
             spec={pivotSpec}
+            distinctValues={(field) => {
+              const seen = new Set<string>();
+              for (const row of pivotInteractive.source.rows) {
+                const v = row[field];
+                seen.add(v == null ? "" : String(v));
+              }
+              return [...seen].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+            }}
             onChange={(next) => {
               setPivotSpec(next);
               pivotInteractive.onSpecChange?.(next); // let the host persist the layout
@@ -513,6 +539,38 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
           </button>
         )}
       </div>
+      {showAddRows && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "6px 14px",
+            borderTop: "1px solid #eaecf0",
+            background: "#f9fafb",
+            fontSize: 13,
+            color: "#475467",
+            flexShrink: 0,
+          }}
+        >
+          <button
+            type="button"
+            onClick={addRowsAtBottom}
+            style={{ color: "#155eef", fontWeight: 600, background: "none", border: "none", cursor: "pointer", padding: 0 }}
+          >
+            Add
+          </button>
+          <input
+            type="number"
+            min={1}
+            value={addRowsN}
+            onChange={(e) => setAddRowsN(Math.max(1, Math.floor(Number(e.target.value)) || 1))}
+            aria-label="Number of rows to add"
+            style={{ width: 72, height: 28, borderRadius: 6, border: "1px solid #d0d5dd", padding: "0 8px", fontSize: 13, color: "#101828", boxSizing: "border-box" }}
+          />
+          more rows at the bottom
+        </div>
+      )}
     </div>
   );
 });
