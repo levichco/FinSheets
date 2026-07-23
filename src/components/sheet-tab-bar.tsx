@@ -280,7 +280,7 @@ export function SheetTabBar(props: SheetTabBarProps) {
       {/* Tab context menu */}
       {menu && menuSheet && createPortal(
         <div ref={menuRef} data-tabbar-keep style={{ ...panel, left, bottom: bottomPx }} onContextMenu={(e) => e.preventDefault()}>
-          <Row label="Delete" icon={<Trash01 size={16} />} danger disabled={visibleCount <= 1} onClick={() => { const s = menuSheet; setMenu(null); setConfirmDelete({ sheetId: s.sheetId, name: s.name }); }} />
+          <Row label="Delete" icon={<Trash01 size={16} />} disabled={visibleCount <= 1} onClick={() => { const s = menuSheet; setMenu(null); setConfirmDelete({ sheetId: s.sheetId, name: s.name }); }} />
           <Row label="Duplicate" icon={<Copy01 size={16} />} onClick={() => { setMenu(null); onDuplicate?.(menu.sheetId); }} />
           <div style={{ position: "relative" }} onMouseEnter={() => setSub("copy")} onMouseLeave={() => setSub((v) => (v === "copy" ? null : v))}>
             <Row label="Copy to" icon={<Copy01 size={16} />}><ChevronRight size={15} color="#98a2b3" /></Row>
