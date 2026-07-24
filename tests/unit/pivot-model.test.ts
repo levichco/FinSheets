@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ROW_TOTAL, computePivotModel, renderPivotModel } from "../../src/features/pivot-model";
+import { ROW_TOTAL, computePivotModel, renderPivotModel, toNumber } from "../../src/features/pivot-model";
 import type { PivotAggregate, PivotSource, PivotSpec } from "../../src/core/types";
 
 describe("row Total with a BLANK column-field value (regression: must include the blank column)", () => {
@@ -276,6 +276,19 @@ describe("computePivotModel — the extra Google aggregates + Show-as", () => {
     // A sum=10, B sum=10, grand=20 → each row total is 0.5 (50%).
     const cellVals = Object.values(rendered.cells).flatMap((row) => Object.values(row)).map((c) => c?.v);
     expect(cellVals).toContain(0.5);
+  });
+});
+
+describe("toNumber — the shared numeric parser (also drives Values aggregate auto-detection)", () => {
+  it("parses currency, accounting negatives, and percents as numbers; text as NaN", () => {
+    expect(toNumber(1234)).toBe(1234);
+    expect(toNumber("$196,282.09")).toBeCloseTo(196282.09, 2);
+    expect(toNumber("(196,282.09)")).toBeCloseTo(-196282.09, 2); // accounting negative
+    expect(toNumber("£1,020")).toBe(1020); // non-$ currency
+    expect(toNumber("¥500")).toBe(500);
+    expect(toNumber("45%")).toBeCloseTo(0.45, 4);
+    expect(Number.isNaN(toNumber("High"))).toBe(true); // text → NaN → COUNTA, not SUM
+    expect(Number.isNaN(toNumber(""))).toBe(true);
   });
 });
 

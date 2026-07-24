@@ -20,7 +20,7 @@ import { attachComments } from "./features/comments";
 import { attachFilterPanel } from "./features/filter-panel";
 import { attachLockColumns } from "./features/lock-columns";
 import { buildPivotCells, computePivot } from "./features/pivot";
-import { computePivotModel, renderPivotModel } from "./features/pivot-model";
+import { computePivotModel, renderPivotModel, toNumber } from "./features/pivot-model";
 import { PivotPanel } from "./features/pivot-panel";
 import { SheetTabMenu } from "./features/sheet-tab-menu";
 import { emptyFormulaCells, findHashCell } from "./core/snapshot-scan";
@@ -539,17 +539,16 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
               // Google-Sheets rule: a Values field defaults to SUM only for a (mostly) numeric
               // column; text/date/mixed columns default to COUNTA ("count") so they render real
               // counts instead of a nonsensical SUM that shows 0 everywhere.
+              // Probe with the SAME parser the SUM engine uses (toNumber — handles $£€¥,
+              // thousands separators, accounting "(n)" negatives, trailing %), so a genuinely
+              // numeric column formatted in accounting/GBP/EUR style isn't misread as text.
               let numeric = 0;
               let seen = 0;
               for (const row of pivotInteractive.source.rows) {
                 const v = row[field];
                 if (v == null || v === "") continue;
                 seen++;
-                if (typeof v === "number") numeric++;
-                else {
-                  const s = String(v).replace(/[$,%\s]/g, "");
-                  if (s !== "" && !Number.isNaN(Number(s))) numeric++;
-                }
+                if (Number.isFinite(toNumber(v))) numeric++;
                 if (seen >= 100) break;
               }
               return seen > 0 && numeric / seen >= 0.8 ? "sum" : "count";

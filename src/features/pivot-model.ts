@@ -106,7 +106,7 @@ const newAcc = (needVals = false, needUniq = false): Acc => ({
  * (the "pivot shows 0 / no data" bug). Strip currency symbols + thousands separators, read
  * accounting-style "(n)" as negative, and honor a trailing "%".
  */
-function toNumber(raw: unknown): number {
+export function toNumber(raw: unknown): number {
   if (typeof raw === "number") return raw;
   if (typeof raw !== "string") return Number(raw);
   let s = raw.trim();
