@@ -527,36 +527,49 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
   const totalStart = dataStart + realCols.length * perCol;
   const columnCount = totalStart + (showGrand.column ? nValues : 0);
 
-  // Header rows: a column-key header line per column level (if any), then the value labels.
+  // Header rows — Google-Sheets layout. When a Columns field is present the header reads:
+  //   row 0: the COLUMN FIELD NAME(s) (e.g. "Amount") — so you see WHAT is spread across the top,
+  //   row 1: the distinct column VALUES (+ "Grand Total"), with the ROW field name in the corner,
+  //   row 2 (ONLY when >1 value): the value NAMES under each column value so measures are labelled.
+  // Previously row 0 and row 1 BOTH showed the column value (a duplicate) — a numeric Columns
+  // field made "both rows numbers" with no field-name label. With NO columns, a single header row
+  // labels the value column(s) with the value name ("Sum of Amount"), like Google Sheets.
   const colDepth = spec.columns.length;
   let headerRows = 0;
   const cellKey = (colPath: string, vi: number) => `${colPath}${SEP}${vi}`;
 
-  // Column-group header (single flattened line for simplicity of the compact view).
   if (colDepth > 0) {
-    const hr = headerRows;
-    set(hr, 0, { v: "", s: HEADER_STYLE });
-    realCols.forEach((col, ci) => {
-      const label = col.split(SEP).join(" / ");
-      // Blank-fill the group's span (perCol slots — ≥1 even with no values), then write the
-      // column label on the FIRST sub-column so a multi-value pivot (e.g. Sum | Count under each
-      // column) unambiguously shows which column each value belongs to.
-      for (let vi = 0; vi < perCol; vi++) set(hr, dataStart + ci * perCol + vi, { v: "", s: HEADER_STYLE });
-      set(hr, dataStart + ci * perCol, { v: label, s: HEADER_STYLE });
-    });
+    // Row 0 — column field name(s), spanning the whole data band (blank-filled, label at the start).
+    const nameRow = headerRows;
+    for (let c = 0; c < columnCount; c++) set(nameRow, c, { v: "", s: HEADER_STYLE });
+    set(nameRow, dataStart, { v: spec.columns.join(" / "), s: HEADER_STYLE });
     headerRows++;
-  }
-  // Value-label header line.
-  {
+
+    // Row 1 — distinct column values (+ Grand Total). Corner = row field name.
+    const valRow = headerRows;
+    set(valRow, 0, { v: spec.rows.join(" / ") || "", s: HEADER_STYLE });
+    realCols.forEach((col, ci) => {
+      for (let vi = 0; vi < perCol; vi++) set(valRow, dataStart + ci * perCol + vi, { v: "", s: HEADER_STYLE });
+      set(valRow, dataStart + ci * perCol, { v: col.split(SEP).join(" / "), s: HEADER_STYLE });
+    });
+    if (showGrand.column) for (let vi = 0; vi < nValues; vi++) set(valRow, totalStart + vi, { v: nValues > 1 ? "" : "Grand Total", s: HEADER_STYLE });
+    if (showGrand.column && nValues > 1) set(valRow, totalStart, { v: "Grand Total", s: HEADER_STYLE });
+    headerRows++;
+
+    // Row 2 — value names under each column value (only when there is more than one value).
+    if (nValues > 1) {
+      const measRow = headerRows;
+      set(measRow, 0, { v: "", s: HEADER_STYLE });
+      realCols.forEach((_col, ci) => values.forEach((v, vi) => set(measRow, dataStart + ci * perCol + vi, { v: valueLabel(v), s: HEADER_STYLE })));
+      if (showGrand.column) values.forEach((v, vi) => set(measRow, totalStart + vi, { v: valueLabel(v), s: HEADER_STYLE }));
+      headerRows++;
+    }
+  } else {
+    // No Columns field — a single header row: row field name in the corner, then the value name(s)
+    // as the column header(s) (Google Sheets shows "SUM of Amount" here, not "Grand Total").
     const hr = headerRows;
     set(hr, 0, { v: spec.rows.join(" / ") || "", s: HEADER_STYLE });
-    realCols.forEach((col, ci) => {
-      values.forEach((v, vi) => {
-        const label = nValues > 1 || colDepth === 0 ? valueLabel(v) : col.split(SEP).join(" / ");
-        set(hr, dataStart + ci * perCol + vi, { v: label, s: HEADER_STYLE });
-      });
-    });
-    if (showGrand.column) values.forEach((v, vi) => set(hr, totalStart + vi, { v: nValues > 1 ? `Total ${valueLabel(v)}` : "Grand Total", s: HEADER_STYLE }));
+    values.forEach((v, vi) => set(hr, totalStart + vi, { v: valueLabel(v), s: HEADER_STYLE }));
     headerRows++;
   }
 

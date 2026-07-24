@@ -292,6 +292,29 @@ describe("toNumber — the shared numeric parser (also drives Values aggregate a
   });
 });
 
+describe("header labeling (Google-Sheets) — column FIELD NAME on top, distinct VALUES below (no duplication)", () => {
+  it("rows + columns + one value: row0 = column field name, row1 = column values (not a numeric duplicate)", () => {
+    const m = computePivotModel(source, { rows: ["region"], columns: ["product"], values: [{ field: "amount", aggregate: "sum" }] });
+    const region = renderPivotModel(m);
+    const val = (r: number, c: number) => (region.cells[r]?.[c] as { v?: unknown } | undefined)?.v;
+    // Row 0: the COLUMN FIELD NAME ("product"), NOT the first column value.
+    expect(val(0, 1)).toBe("product");
+    // Row 1: row field name in the corner, then the distinct column values A, B.
+    expect(val(1, 0)).toBe("region");
+    expect([val(1, 1), val(1, 2)].sort()).toEqual(["A", "B"]);
+    // The two header rows must NOT be identical (the old duplicate bug).
+    expect(val(0, 1)).not.toBe(val(1, 1));
+  });
+
+  it("rows + one value, NO columns: the value column is labelled with the value name (not 'Grand Total')", () => {
+    const m = computePivotModel(source, { rows: ["region"], columns: [], values: [{ field: "amount", aggregate: "sum" }] });
+    const region = renderPivotModel(m);
+    const val = (r: number, c: number) => (region.cells[r]?.[c] as { v?: unknown } | undefined)?.v;
+    expect(val(0, 0)).toBe("region"); // row field name in the corner
+    expect(val(0, 1)).toBe("Sum of amount"); // value name as the column header, GS-style
+  });
+});
+
 describe("empty / rows-only pivots (Google-Sheets behavior — no invented COUNT, no phantom Grand Total)", () => {
   it("a fully-empty spec renders the Google-Sheets placeholder scaffold (Columns/Rows/Values), no computed data", () => {
     const empty: PivotSpec = { rows: [], columns: [], values: [] };
@@ -351,9 +374,10 @@ describe("columns without values still lay out their labels (Image #13 fix)", ()
     const region = renderPivotModel(m);
     // 2 distinct columns (East, West) → row-label col + 2 column slots.
     expect(region.columnCount).toBe(3);
-    // The column labels appear in the first header row (cols 1 and 2).
-    const header0 = region.cells[0] ?? {};
-    const labels = [header0[1], header0[2]].map((c) => (c as { v?: unknown } | undefined)?.v).sort();
-    expect(labels).toEqual(["East", "West"]);
+    // Google-Sheets header layout: row 0 = the COLUMN FIELD NAME, row 1 = the distinct values.
+    const val = (r: number, c: number) => (region.cells[r]?.[c] as { v?: unknown } | undefined)?.v;
+    expect(val(0, 1)).toBe("region"); // column field name on top
+    const labels = [val(1, 1), val(1, 2)].sort();
+    expect(labels).toEqual(["East", "West"]); // distinct column values below
   });
 })
