@@ -110,6 +110,20 @@ describe("pivot-panel spec helpers", () => {
     expect(fieldsInArea(afterRowsX, "values")).toEqual(["Amount", "Region"]); // still summed
   });
 
+  it("placeField applies a type-detected Values aggregate (COUNTA for text, SUM for numeric)", () => {
+    const spec: PivotSpec = { rows: ["Region"], columns: [], values: [] };
+    // Text field → COUNTA ("count") so it renders counts, not a 0-filled SUM.
+    const asText = placeField(spec, "Status", "values", undefined, undefined, "count");
+    expect(asText.values).toEqual([{ field: "Status", aggregate: "count" }]);
+    // Numeric field → SUM.
+    const asNum = placeField(spec, "Amount", "values", undefined, undefined, "sum");
+    expect(asNum.values).toEqual([{ field: "Amount", aggregate: "sum" }]);
+    // A moved value keeps its existing aggregate regardless of the passed default.
+    const withAvg = setValueAggregate(asNum, "Amount", "average");
+    const moved = placeField(withAvg, "Amount", "values", 0, "values", "sum");
+    expect(aggregateOfValue(moved, "Amount")).toBe("average");
+  });
+
   it("clearAll empties every area", () => {
     const full: PivotSpec = { rows: ["A"], columns: ["B"], values: [{ field: "C", aggregate: "sum" }], filters: [{ field: "D" }], dimSettings: { A: { order: "desc" } } };
     const empty = clearAll(full);
@@ -195,6 +209,22 @@ describe("<PivotPanel />", () => {
     fireEvent.click(screen.getByText("Sum of Amount"));
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange.mock.calls[0][0].dimSettings?.Amount?.sortBy).toBe("Amount");
+  });
+
+  it("uses defaultAggregate (COUNTA for a text field) when adding to Values", () => {
+    const onChange = vi.fn();
+    render(
+      <PivotPanel
+        fields={["Region", "Status", "Amount"]}
+        spec={{ rows: ["Region"], columns: [], values: [] }}
+        onChange={onChange}
+        defaultAggregate={(f) => (f === "Amount" ? "sum" : "count")}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("add-values"));
+    fireEvent.click(screen.getByTestId("add-field-values-Status")); // text field
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0][0].values).toEqual([{ field: "Status", aggregate: "count" }]);
   });
 
   it("Clear all resets the pivot to empty", () => {

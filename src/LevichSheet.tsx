@@ -535,6 +535,25 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
               }
               return [...seen].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
             }}
+            defaultAggregate={(field) => {
+              // Google-Sheets rule: a Values field defaults to SUM only for a (mostly) numeric
+              // column; text/date/mixed columns default to COUNTA ("count") so they render real
+              // counts instead of a nonsensical SUM that shows 0 everywhere.
+              let numeric = 0;
+              let seen = 0;
+              for (const row of pivotInteractive.source.rows) {
+                const v = row[field];
+                if (v == null || v === "") continue;
+                seen++;
+                if (typeof v === "number") numeric++;
+                else {
+                  const s = String(v).replace(/[$,%\s]/g, "");
+                  if (s !== "" && !Number.isNaN(Number(s))) numeric++;
+                }
+                if (seen >= 100) break;
+              }
+              return seen > 0 && numeric / seen >= 0.8 ? "sum" : "count";
+            }}
             onChange={(next) => {
               setPivotSpec(next);
               pivotInteractive.onSpecChange?.(next); // let the host persist the layout
@@ -543,28 +562,38 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
           />
         )}
         {pivotInteractive && !pivotOpen && (
+          // Closing the editor hides it entirely; this floating "Edit" pencil (Google-Sheets
+          // affordance) brings it back. Design-system tokens — fiab-yellow, theme-aware.
           <button
             type="button"
             onClick={() => setPivotOpen(true)}
-            aria-label="Show PivotTable fields"
+            aria-label="Edit pivot table"
+            title="Edit pivot table"
             style={{
               position: "absolute",
               top: 12,
               right: 12,
               zIndex: 50,
-              height: 34,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              height: 36,
               padding: "0 14px",
               borderRadius: 8,
-              border: "1px solid #eaecf0",
-              background: "#fff",
-              color: "#344054",
+              border: "1px solid var(--color-border-primary)",
+              background: "var(--color-bg-primary)",
+              color: "var(--color-text-secondary)",
               fontSize: 13,
               fontWeight: 600,
               cursor: "pointer",
               boxShadow: "0 2px 8px rgba(16,24,40,0.10)",
             }}
           >
-            PivotTable Fields
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+            </svg>
+            Edit
           </button>
         )}
       </div>

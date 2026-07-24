@@ -280,10 +280,16 @@ describe("computePivotModel — the extra Google aggregates + Show-as", () => {
 });
 
 describe("empty / rows-only pivots (Google-Sheets behavior — no invented COUNT, no phantom Grand Total)", () => {
-  it("a fully-empty spec renders NOTHING (no invented count, no Grand Total artifact)", () => {
+  it("a fully-empty spec renders the Google-Sheets placeholder scaffold (Columns/Rows/Values), no computed data", () => {
     const empty: PivotSpec = { rows: [], columns: [], values: [] };
     const region = renderPivotModel(computePivotModel(source, empty));
-    expect(region).toEqual({ cells: {}, rowCount: 0, columnCount: 0 });
+    expect(region.rowCount).toBe(2);
+    expect(region.columnCount).toBe(2);
+    expect(region.cells[0]?.[1]?.v).toBe("Columns"); // B1
+    expect(region.cells[1]?.[0]?.v).toBe("Rows"); // A2
+    expect(region.cells[1]?.[1]?.v).toBe("Values"); // B2
+    // No invented Grand Total / numeric artifact anywhere in the scaffold.
+    expect(region.cells[0]?.[0]).toBeUndefined();
   });
 
   it("rows-only (no values) groups by the row field but renders NO value cells / no numeric Grand Total", () => {

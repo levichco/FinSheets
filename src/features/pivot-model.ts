@@ -483,14 +483,27 @@ export interface RenderedPivot {
   columnCount: number;
 }
 
+// Placeholder scaffold shown for a brand-new / cleared pivot — mirrors Google Sheets, which
+// draws "Columns" (B1), "Rows" (A2) and "Values" (B2) on the sheet so the empty pivot reads as
+// a pivot-in-progress rather than a blank grid. Muted so it's clearly a placeholder, not data.
+const SCAFFOLD_HEAD_STYLE: CellStyle = { bl: 1, bg: { rgb: "#EFF4FF" }, cl: { rgb: "#475467" } };
+const SCAFFOLD_LABEL_STYLE: CellStyle = { bl: 1, cl: { rgb: "#98A2B3" }, bg: { rgb: "#F9FAFB" } };
+
 /** Render a computed pivot model into a styled cell region. */
 export function renderPivotModel(model: PivotModel): RenderedPivot {
   const { spec, colLeaves, values } = model;
-  // A fully-empty pivot (no rows, columns, or values) renders NOTHING — the in-place
-  // apply then clears any stale rectangle, so an unconfigured/cleared pivot is blank
-  // (matches Google Sheets) instead of leaving a phantom "Grand Total" behind.
+  // A fully-empty pivot (no rows, columns, or values) renders the Google-Sheets placeholder
+  // scaffold: "Columns" at B1, "Rows" at A2, "Values" at B2. This gives the user a visible
+  // target on the sheet while they configure fields, instead of a disorienting blank grid.
   if (spec.rows.length === 0 && spec.columns.length === 0 && values.length === 0) {
-    return { cells: {}, rowCount: 0, columnCount: 0 };
+    return {
+      cells: {
+        0: { 1: { v: "Columns", s: SCAFFOLD_HEAD_STYLE } },
+        1: { 0: { v: "Rows", s: SCAFFOLD_LABEL_STYLE }, 1: { v: "Values", s: SCAFFOLD_LABEL_STYLE } },
+      },
+      rowCount: 2,
+      columnCount: 2,
+    };
   }
   const collapsed = new Set(spec.collapsed ?? []);
   const showRowSubtotals = spec.showRowSubtotals ?? spec.rows.length > 1;
