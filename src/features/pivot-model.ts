@@ -714,11 +714,6 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
   // Google Sheets shows an empty group key (row or column) as the literal "(blank)".
   const BLANK_LABEL = "(blank)";
   const showKey = (k: string) => (k === "" ? BLANK_LABEL : k);
-  const showPath = (p: string) =>
-    p
-      .split(SEP)
-      .map(showKey)
-      .join(" / ");
   // Count aggregates render as integers (no decimals), like Google Sheets; other aggregates keep
   // the source/number pattern.
   const isCount = (agg: PivotAggregate) => agg === "count" || agg === "countNumbers" || agg === "countunique";
@@ -757,16 +752,31 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
     set(nameRow, dataStart, { v: spec.columns.join(" / "), s: HEADER_STYLE });
     headerRows++;
 
-    // Row 1 — distinct column values (+ Grand Total). Corner = row field name.
-    const valRow = headerRows;
-    set(valRow, 0, { v: spec.rows.join(" / ") || "", s: HEADER_STYLE });
-    realCols.forEach((col, ci) => {
-      for (let vi = 0; vi < perCol; vi++) set(valRow, dataStart + ci * perCol + vi, { v: "", s: HEADER_STYLE });
-      set(valRow, dataStart + ci * perCol, { v: showPath(col), s: HEADER_STYLE });
-    });
-    if (showGrand.column) for (let vi = 0; vi < nValues; vi++) set(valRow, totalStart + vi, { v: nValues > 1 ? "" : "Grand Total", s: HEADER_STYLE });
-    if (showGrand.column && nValues > 1) set(valRow, totalStart, { v: "Grand Total", s: HEADER_STYLE });
-    headerRows++;
+    // One value-header row PER column level — a TIERED header (Google Sheets). Each level shows its
+    // distinct values; a parent label is written once at the start of its span (blanks across the
+    // rest) so nested columns read as "Journal | Invoice" over "High | Low", not "Journal / High".
+    // For a SINGLE column level this collapses to exactly one row (the previous behavior).
+    for (let lvl = 0; lvl < colDepth; lvl++) {
+      const hrLvl = headerRows;
+      // The row field name sits in the corner of the LAST level row (adjacent to the data).
+      set(hrLvl, 0, { v: lvl === colDepth - 1 ? spec.rows.join(" / ") || "" : "", s: HEADER_STYLE });
+      let prevPrefix: string | null = null;
+      realCols.forEach((col, ci) => {
+        const parts = col.split(SEP);
+        const prefix = parts.slice(0, lvl + 1).join(SEP);
+        for (let vi = 0; vi < perCol; vi++) set(hrLvl, dataStart + ci * perCol + vi, { v: "", s: HEADER_STYLE });
+        if (prefix !== prevPrefix) {
+          set(hrLvl, dataStart + ci * perCol, { v: showKey(parts[lvl]), s: HEADER_STYLE });
+          prevPrefix = prefix;
+        }
+      });
+      // "Grand Total" spans the value columns on the FIRST level row only.
+      if (showGrand.column) {
+        for (let vi = 0; vi < nValues; vi++) set(hrLvl, totalStart + vi, { v: "", s: HEADER_STYLE });
+        if (lvl === 0) set(hrLvl, totalStart, { v: "Grand Total", s: HEADER_STYLE });
+      }
+      headerRows++;
+    }
 
     // Row 2 — value names under each column value (only when there is more than one value).
     if (nValues > 1) {

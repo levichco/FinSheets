@@ -314,6 +314,33 @@ describe("Wave 3 — value cells inherit the source column number format (curren
   });
 });
 
+describe("Wave 4c — multi-level (tiered) column headers", () => {
+  it("nested columns render one tiered header row per level (parent spans, not 'A / B' joined)", () => {
+    const src: PivotSource = {
+      fields: ["r", "c1", "c2", "amt"],
+      rows: [
+        { r: "X", c1: "Journal", c2: "High", amt: 1 },
+        { r: "X", c1: "Journal", c2: "Low", amt: 2 },
+        { r: "X", c1: "Invoice", c2: "High", amt: 3 },
+      ],
+    };
+    const region = renderPivotModel(computePivotModel(src, { rows: ["r"], columns: ["c1", "c2"], values: [{ field: "amt", aggregate: "sum" }] }));
+    const val = (r: number, c: number) => (region.cells[r]?.[c] as { v?: unknown } | undefined)?.v;
+    // Row 0: column field names "c1 / c2". Row 1: level-1 values (Journal spanning its 2 cols, Invoice).
+    // Row 2: level-2 values (High/Low/High). No cell should contain the joined "Journal / High".
+    expect(val(0, 1)).toBe("c1 / c2");
+    // Columns sort alphabetically: Invoice(High) | Journal(High) | Journal(Low).
+    // Level-1 row: Invoice at col 1, Journal at col 2 (spans cols 2-3), col 3 blank (spanned).
+    expect(val(1, 1)).toBe("Invoice");
+    expect(val(1, 2)).toBe("Journal");
+    expect(val(1, 3)).toBe(""); // spanned (blank), not repeated
+    // Level-2 row: the leaf values.
+    expect([val(2, 1), val(2, 2), val(2, 3)]).toEqual(["High", "High", "Low"]);
+    // Nothing is the old joined "A / B" label.
+    for (let c = 1; c < region.columnCount; c++) expect(String(val(1, c) ?? "")).not.toContain(" / ");
+  });
+});
+
 describe("Wave 4 — Show as: running total + % of parent row", () => {
   const src: PivotSource = {
     fields: ["m", "amt"],
