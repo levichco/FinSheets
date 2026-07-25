@@ -12,7 +12,7 @@
  */
 import { ALIGN_CENTER, ALIGN_RIGHT, NUMBER_PATTERN } from "./formatting";
 import { evalFormula, formulaRefs } from "./pivot-formula";
-import type { Cell, CellStyle, PivotAggregate, PivotFilterCondition, PivotGroupRule, PivotModel, PivotNode, PivotSource, PivotSpec, PivotValueField } from "../core/types";
+import type { Cell, CellStyle, PivotAggregate, PivotCellRef, PivotFilterCondition, PivotGroupRule, PivotModel, PivotNode, PivotSource, PivotSpec, PivotValueField } from "../core/types";
 
 const SEP = "␟"; // ␟ — a path separator that won't collide with real field values.
 // Dedicated colPath for the row-Total column. A NUL byte can't appear in a stringified
@@ -847,6 +847,155 @@ export function collectCollapsiblePaths(model: PivotModel): string[] {
   };
   walk(model.rowTree);
   return out;
+}
+
+/** Row-group path (SEP-joined) for a source row under `fields`, honoring any group-by rule. */
+function drillPathOf(spec: PivotSpec, r: Record<string, unknown>, fields: string[]): string {
+  return fields
+    .map((f) => {
+      const rule = spec.dimSettings?.[f]?.groupRule;
+      return rule ? applyGroupRule(r[f], rule) : String(r[f] ?? "");
+    })
+    .join(SEP);
+}
+
+/**
+ * The underlying SOURCE ROWS aggregated into a pivot cell — Google Sheets "Show details". Re-applies
+ * the SAME source filter chain as `computePivotModel`, then keeps rows whose row-group path and
+ * column-group path match the target (a parent/subtotal path matches all its descendants; the
+ * grand row/column — "" or ROW_TOTAL — matches everything on that axis).
+ */
+export function matchDrillRows(source: PivotSource, spec: PivotSpec, rowPath: string, colPath: string, now: number = Date.now()): Array<Record<string, unknown>> {
+  const filters = spec.filters ?? [];
+  const filtered = source.rows.filter((r) =>
+    filters.every((f) => {
+      const raw = r[f.field];
+      if (f.include && !f.include.includes(String(raw ?? ""))) return false;
+      const conds = f.conditions ?? (f.condition ? [f.condition] : []);
+      if (conds.length) {
+        const ok = f.combiner === "or" ? conds.some((c) => matchesCondition(raw, c, now)) : conds.every((c) => matchesCondition(raw, c, now));
+        if (!ok) return false;
+      }
+      return true;
+    }),
+  );
+  // ONLY the ROW_TOTAL sentinel means "match every group on this axis". The empty string is a REAL
+  // blank-value path ("(blank)" group) and must match EXACTLY — never as a wildcard (that would make
+  // drilling a "(blank)" column/row return the whole axis). The genuine no-dimension match-all is
+  // handled separately by the `fields.length === 0` guard below.
+  const matchPath = (r: Record<string, unknown>, fields: string[], target: string) => {
+    if (target === ROW_TOTAL || fields.length === 0) return true;
+    const p = drillPathOf(spec, r, fields);
+    return p === target || p.startsWith(target + SEP);
+  };
+  return filtered.filter((r) => matchPath(r, spec.rows, rowPath) && matchPath(r, spec.columns, colPath));
+}
+
+/**
+ * Reverse-map a clicked sheet cell (row, col) to the pivot VALUE cell it represents — the geometry
+ * mirror of `renderPivotModel` needed for drill-down. Returns null when the cell is not a value cell
+ * (row-label column, a header row, a blank spacer, or a rows-axis group-label row). Handles both
+ * value axes, blank-row spacers, per-dimension subtotals, and the grand-total row.
+ */
+export function drillTargetAt(model: PivotModel, row: number, col: number): PivotCellRef | null {
+  const { spec, values } = model;
+  if (col <= 0) return null; // col 0 is the row-label column
+  const headerRows = pivotHeaderRowCount(spec);
+  if (row < headerRows) return null; // header band
+
+  const nValues = values.length;
+  const valuesAxis: "rows" | "columns" = nValues > 1 && spec.valuesAxis === "rows" ? "rows" : "columns";
+  const perCol = valuesAxis === "rows" ? 1 : nValues || 1;
+  const realCols = spec.columns.length > 0 ? model.colLeaves.slice() : model.colLeaves.filter((c) => c !== "");
+  const dataStart = 1;
+  const totalStart = dataStart + realCols.length * perCol;
+  const showGrand = nValues === 0 ? { row: false, column: false } : spec.showGrandTotals ?? { row: true, column: true };
+  const collapsed = new Set(spec.collapsed ?? []);
+  const showRowSubtotals = spec.showRowSubtotals ?? spec.rows.length > 1;
+  const blankBetween = spec.blankRowBetweenGroups ?? false;
+  if (nValues === 0) return null; // no values → nothing to drill
+
+  // Resolve the COLUMN → (colPath, colVi). colVi only meaningful on the columns axis.
+  let colPath: string;
+  let colVi: number | null;
+  if (col >= totalStart) {
+    if (!showGrand.column) return null;
+    colPath = ROW_TOTAL;
+    colVi = valuesAxis === "rows" ? null : col - totalStart;
+    if (colVi !== null && (colVi < 0 || colVi >= nValues)) return null;
+  } else {
+    const off = col - dataStart;
+    const ci = Math.floor(off / perCol);
+    if (ci < 0 || ci >= realCols.length) return null;
+    colPath = realCols[ci];
+    colVi = valuesAxis === "rows" ? null : off % perCol;
+  }
+
+  // Walk the body EXACTLY like renderPivotModel, tracking each emitted sheet-row → what it is.
+  let r = headerRows;
+  let hit: { node: PivotNode | null; rowVi: number | null } | null = null;
+  const labelOf = (p: string) => (p === "" ? "(blank)" : p === ROW_TOTAL ? (spec.grandTotalLabel?.trim() || "Grand Total") : p.split(SEP).pop() || "");
+
+  const emitValueBearing = (node: PivotNode | null) => {
+    if (valuesAxis === "rows") {
+      // label row (not value-bearing) is emitted by the caller; here we place N value sub-rows.
+      for (let vi = 0; vi < nValues; vi++) {
+        if (r === row) hit = { node, rowVi: vi };
+        r++;
+      }
+    } else {
+      if (r === row) hit = { node, rowVi: null };
+      r++;
+    }
+  };
+
+  const walk = (nodes: PivotNode[], isTop: boolean) => {
+    nodes.forEach((node, ni) => {
+      const hasChildren = node.children.length > 0;
+      const isCollapsed = collapsed.has(node.path);
+      const isLeaf = !hasChildren || isCollapsed;
+      if (valuesAxis === "rows") {
+        // group/leaf LABEL row (not value-bearing)
+        r++;
+        if (isLeaf) emitValueBearing(node);
+      } else {
+        if (r === row) hit = { node, rowVi: null };
+        r++;
+      }
+      if (!isLeaf) {
+        walk(node.children, false);
+        const showThisTotal = spec.dimSettings?.[spec.rows[node.level]]?.showTotals ?? showRowSubtotals;
+        if (showThisTotal) {
+          if (valuesAxis === "rows") {
+            r++; // subtotal label row
+            emitValueBearing(node);
+          } else {
+            if (r === row) hit = { node, rowVi: null };
+            r++;
+          }
+        }
+      }
+      if (blankBetween && isTop && ni < nodes.length - 1) r++;
+    });
+  };
+  if (spec.rows.length > 0) walk(model.rowTree, true);
+
+  // Grand-total row(s).
+  if (!hit && showGrand.row) {
+    if (valuesAxis === "rows") {
+      r++; // grand label row
+      emitValueBearing(null);
+    } else {
+      if (r === row) hit = { node: null, rowVi: null };
+      r++;
+    }
+  }
+
+  if (!hit) return null; // clicked a label / spacer / out-of-body row
+  const h: { node: PivotNode | null; rowVi: number | null } = hit;
+  const valueIndex = valuesAxis === "rows" ? h.rowVi ?? 0 : colVi ?? 0;
+  const rowPath = h.node ? h.node.path : ROW_TOTAL;
+  return { rowPath, colPath, valueIndex, rowLabel: labelOf(rowPath), colLabel: labelOf(colPath) };
 }
 
 // Placeholder scaffold shown for a brand-new / cleared pivot — mirrors Google Sheets, which

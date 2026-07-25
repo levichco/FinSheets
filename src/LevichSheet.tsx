@@ -20,7 +20,7 @@ import { attachComments } from "./features/comments";
 import { attachFilterPanel } from "./features/filter-panel";
 import { attachLockColumns } from "./features/lock-columns";
 import { buildPivotCells, computePivot } from "./features/pivot";
-import { collectCollapsiblePaths, computePivotModel, pivotHeaderRowCount, renderPivotModel, toNumber } from "./features/pivot-model";
+import { collectCollapsiblePaths, computePivotModel, drillTargetAt, matchDrillRows, pivotHeaderRowCount, renderPivotModel, toNumber } from "./features/pivot-model";
 import { PivotPanel } from "./features/pivot-panel";
 import { SheetTabMenu } from "./features/sheet-tab-menu";
 import { emptyFormulaCells, findHashCell } from "./core/snapshot-scan";
@@ -315,6 +315,30 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
           const d2 = f.addEvent(ev.SelectionChanged ?? "SelectionChanged", onClick);
           if (d1) disposers.push(d1);
           if (d2) disposers.push(d2);
+        }
+        // Drill-down ("Show details"): double-click a VALUE cell → hand the host the underlying
+        // source rows aggregated into that cell. Row-label / header / spacer cells return null.
+        const onDbl = () => {
+          const spec = specRef.current;
+          if (!spec || !pivotInteractive.onDrillDown) return;
+          try {
+            const wb = univerAPI.getActiveWorkbook() as unknown as { getActiveRange?: () => { getRow?: () => number; getColumn?: () => number } | null };
+            const range = wb?.getActiveRange?.();
+            const row = range?.getRow?.();
+            const col = range?.getColumn?.();
+            if (row == null || col == null) return;
+            const model = computePivotModel(pivotInteractive.source, spec);
+            const ref = drillTargetAt(model, row, col);
+            if (!ref) return;
+            const rows = matchDrillRows(pivotInteractive.source, spec, ref.rowPath, ref.colPath);
+            pivotInteractive.onDrillDown(rows, ref);
+          } catch {
+            /* drill resolution is best-effort */
+          }
+        };
+        if (f.addEvent) {
+          const d3 = f.addEvent(ev.DblClicked ?? "DblClicked", onDbl);
+          if (d3) disposers.push(d3);
         }
       } catch {
         /* selection surface differs — collapse falls back to a no-op */

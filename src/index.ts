@@ -29,7 +29,7 @@ export type { RenameModalProps } from "./components/rename-modal";
 export { FindReplaceModal } from "./components/find-replace-modal";
 export { PivotPanel } from "./features/pivot-panel";
 export type { PivotPanelProps, PivotArea } from "./features/pivot-panel";
-export { computePivotModel, renderPivotModel, valueLabel } from "./features/pivot-model";
+export { computePivotModel, renderPivotModel, valueLabel, matchDrillRows, drillTargetAt } from "./features/pivot-model";
 export { LEVICH_BRAND } from "./theme/brand";
 
 export type {
@@ -46,6 +46,7 @@ export type {
   PivotFilterField,
   PivotModel,
   PivotNode,
+  PivotCellRef,
   CellEditEvent,
   ImportLocation,
   LevichSheetProps,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ROW_TOTAL, collectCollapsiblePaths, computePivotModel, matchesCondition, pivotHeaderRowCount, renderPivotModel, toNumber } from "../../src/features/pivot-model";
+import { ROW_TOTAL, collectCollapsiblePaths, computePivotModel, drillTargetAt, matchDrillRows, matchesCondition, pivotHeaderRowCount, renderPivotModel, toNumber } from "../../src/features/pivot-model";
 import type { PivotAggregate, PivotSource, PivotSpec } from "../../src/core/types";
 
 describe("row Total with a BLANK column-field value (regression: must include the blank column)", () => {
@@ -561,6 +561,66 @@ describe("Wave 4 — layout options (grand-total label / blank rows / center lab
       }
     }
     expect(found).toBe(true);
+  });
+});
+
+describe("Drill-down — matchDrillRows + drillTargetAt (Show details)", () => {
+  const src: PivotSource = {
+    fields: ["region", "product", "type", "amt"],
+    rows: [
+      { region: "West", product: "A", type: "P", amt: 100 },
+      { region: "West", product: "A", type: "Q", amt: 50 },
+      { region: "West", product: "B", type: "P", amt: 30 },
+      { region: "East", product: "A", type: "P", amt: 200 },
+    ],
+  };
+
+  it("matchDrillRows returns the source rows under a leaf, a parent (subtotal), and grand", () => {
+    const spec: PivotSpec = { rows: ["region", "product"], columns: [], values: [{ field: "amt", aggregate: "sum" }] };
+    expect(matchDrillRows(src, spec, "West␟A", "").map((r) => r.amt as number).sort((a, b) => a - b)).toEqual([50, 100]); // West/A
+    expect(matchDrillRows(src, spec, "West", "").length).toBe(3); // all West (parent/subtotal)
+    expect(matchDrillRows(src, spec, ROW_TOTAL, ROW_TOTAL).length).toBe(4); // grand → everything
+  });
+
+  it("matchDrillRows intersects row-group AND column-group", () => {
+    const spec: PivotSpec = { rows: ["region"], columns: ["type"], values: [{ field: "amt", aggregate: "sum" }] };
+    // West × type=P → the single West/P row (amt 30 + 100? West has P:100, P:30, Q:50 → P rows = 100,30).
+    expect(matchDrillRows(src, spec, "West", "P").map((r) => r.amt as number).sort((a, b) => a - b)).toEqual([30, 100]);
+    expect(matchDrillRows(src, spec, "West", ROW_TOTAL).length).toBe(3); // column-total → all West
+  });
+
+  it("matchDrillRows treats a blank '(blank)' group as an EXACT path, not match-all", () => {
+    const bsrc: PivotSource = { fields: ["region", "amt"], rows: [{ region: "West", amt: 10 }, { region: "", amt: 20 }, { region: "East", amt: 30 }] };
+    const spec: PivotSpec = { rows: ["region"], columns: [], values: [{ field: "amt", aggregate: "sum" }] };
+    // Drilling the "(blank)" row group (rowPath "") returns ONLY the blank-region row (not all rows).
+    expect(matchDrillRows(bsrc, spec, "", "").map((r) => r.amt as number)).toEqual([20]);
+    // The grand-total sentinel still matches everything.
+    expect(matchDrillRows(bsrc, spec, ROW_TOTAL, "").length).toBe(3);
+  });
+
+  it("matchDrillRows respects the source filter chain", () => {
+    const spec: PivotSpec = { rows: ["region"], columns: [], values: [{ field: "amt", aggregate: "sum" }], filters: [{ field: "amt", condition: { type: "gt", value: 40 } }] };
+    // amt>40 drops the 30 → West grand drill has 100 + 50 = 2 rows.
+    expect(matchDrillRows(src, spec, "West", "").map((r) => r.amt as number).sort((a, b) => a - b)).toEqual([50, 100]);
+  });
+
+  it("drillTargetAt maps a data cell to its (rowPath, colPath, valueIndex); null for labels/headers", () => {
+    const spec: PivotSpec = { rows: ["region"], columns: [], values: [{ field: "amt", aggregate: "sum" }] };
+    const model = computePivotModel(src, spec);
+    const region = renderPivotModel(model);
+    // Find the "West" body row; its value cell is at col = totalStart (no columns → value in the total col).
+    let westRow = -1;
+    for (let r = 0; r < region.rowCount; r++) if ((region.cells[r]?.[0] as { v?: unknown } | undefined)?.v === "West") westRow = r;
+    // Column 0 (label) → null.
+    expect(drillTargetAt(model, westRow, 0)).toBeNull();
+    // Header row → null.
+    expect(drillTargetAt(model, 0, 1)).toBeNull();
+    // The West value cell (col 1 = the single value/grand column) → rowPath "West".
+    const ref = drillTargetAt(model, westRow, 1);
+    expect(ref?.rowPath).toBe("West");
+    expect(ref?.valueIndex).toBe(0);
+    // And matchDrillRows on that ref returns West's rows.
+    expect(matchDrillRows(src, spec, ref!.rowPath, ref!.colPath).length).toBe(3);
   });
 });
 
