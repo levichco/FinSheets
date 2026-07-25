@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ROW_TOTAL, computePivotModel, renderPivotModel, toNumber } from "../../src/features/pivot-model";
+import { ROW_TOTAL, collectCollapsiblePaths, computePivotModel, pivotHeaderRowCount, renderPivotModel, toNumber } from "../../src/features/pivot-model";
 import type { PivotAggregate, PivotSource, PivotSpec } from "../../src/core/types";
 
 describe("row Total with a BLANK column-field value (regression: must include the blank column)", () => {
@@ -469,6 +469,50 @@ describe("Wave 4 — Show as: running total + % of parent row", () => {
       .sort((a, b) => a - b);
     // 10/60≈0.167, 20/60≈0.333, 30/60=0.5.
     expect(vals).toEqual([0.167, 0.333, 0.5]);
+  });
+});
+
+describe("Wave 1 — collapse geometry helpers (header alignment + collapsible paths)", () => {
+  const src: PivotSource = {
+    fields: ["region", "product", "cat", "sub", "amt", "qty"],
+    rows: [
+      { region: "West", product: "A", cat: "X", sub: "P", amt: 10, qty: 1 },
+      { region: "West", product: "B", cat: "Y", sub: "Q", amt: 20, qty: 2 },
+      { region: "East", product: "A", cat: "X", sub: "Q", amt: 30, qty: 3 },
+    ],
+  };
+
+  it("pivotHeaderRowCount matches the renderer's header layout for every column/value shape", () => {
+    const v1 = [{ field: "amt", aggregate: "sum" as const }];
+    const v2 = [{ field: "amt", aggregate: "sum" as const }, { field: "qty", aggregate: "sum" as const }];
+    expect(pivotHeaderRowCount({ rows: ["region"], columns: [], values: v1 })).toBe(1); // no cols → 1 row
+    expect(pivotHeaderRowCount({ rows: ["region"], columns: ["cat"], values: v1 })).toBe(2); // name + 1 level
+    expect(pivotHeaderRowCount({ rows: ["region"], columns: ["cat", "sub"], values: v1 })).toBe(3); // name + 2 levels
+    expect(pivotHeaderRowCount({ rows: ["region"], columns: ["cat"], values: v2 })).toBe(3); // name + 1 level + measure
+    expect(pivotHeaderRowCount({ rows: ["region"], columns: ["cat", "sub"], values: v2 })).toBe(4); // name + 2 levels + measure
+  });
+
+  it("first collapsible group label sits EXACTLY at pivotHeaderRowCount (hit-test alignment) — tiered cols + multi-value", () => {
+    // This is the regression the Wave-1 fix targets: with 2 column levels AND 2 values the old
+    // `(colDepth>0?1:0)+1` under-counted the header, so collapse clicks hit the wrong row.
+    const spec: PivotSpec = { rows: ["region", "product"], columns: ["cat", "sub"], values: [{ field: "amt", aggregate: "sum" }, { field: "qty", aggregate: "sum" }] };
+    const region = renderPivotModel(computePivotModel(src, spec));
+    let firstChevron = -1;
+    for (let r = 0; r < region.rowCount; r++) {
+      const v = String((region.cells[r]?.[0] as { v?: unknown } | undefined)?.v ?? "");
+      if (v.startsWith("▾ ") || v.startsWith("▸ ")) {
+        firstChevron = r;
+        break;
+      }
+    }
+    expect(firstChevron).toBe(pivotHeaderRowCount(spec));
+  });
+
+  it("collectCollapsiblePaths returns every parent (non-leaf) row path and no leaves", () => {
+    const m = computePivotModel(src, { rows: ["region", "product"], columns: [], values: [{ field: "amt", aggregate: "sum" }] });
+    const paths = collectCollapsiblePaths(m);
+    expect(paths.sort()).toEqual(["East", "West"]); // region groups have children; product leaves excluded
+    expect(paths.some((p) => p.includes("␟"))).toBe(false); // no nested (leaf) paths
   });
 });
 

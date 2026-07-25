@@ -20,7 +20,7 @@ import { attachComments } from "./features/comments";
 import { attachFilterPanel } from "./features/filter-panel";
 import { attachLockColumns } from "./features/lock-columns";
 import { buildPivotCells, computePivot } from "./features/pivot";
-import { computePivotModel, renderPivotModel, toNumber } from "./features/pivot-model";
+import { collectCollapsiblePaths, computePivotModel, pivotHeaderRowCount, renderPivotModel, toNumber } from "./features/pivot-model";
 import { PivotPanel } from "./features/pivot-panel";
 import { SheetTabMenu } from "./features/sheet-tab-menu";
 import { emptyFormulaCells, findHashCell } from "./core/snapshot-scan";
@@ -52,8 +52,10 @@ function collapsibleRowPaths(model: ReturnType<typeof computePivotModel>): Map<n
   const { spec } = model;
   const collapsed = new Set(spec.collapsed ?? []);
   const showRowSubtotals = spec.showRowSubtotals ?? spec.rows.length > 1;
-  const colDepth = spec.columns.length;
-  const headerRows = (colDepth > 0 ? 1 : 0) + 1; // column-group line (opt) + value-label line
+  // Header height comes from the SHARED renderer helper so this hit-test can never drift from
+  // renderPivotModel again (it did once when Wave 4c added tiered multi-level headers + the
+  // multi-value measure row and the old `(colDepth>0?1:0)+1` under-counted both).
+  const headerRows = pivotHeaderRowCount(spec);
   const out = new Map<number, string>();
   let r = headerRows;
   const walk = (nodes: typeof model.rowTree) => {
@@ -64,11 +66,14 @@ function collapsibleRowPaths(model: ReturnType<typeof computePivotModel>): Map<n
       r++;
       if (hasChildren && !isCollapsed) {
         walk(node.children);
-        if (showRowSubtotals) r++; // subtotal row
+        // Per-dimension "Show totals" (dimSettings) falls back to the global default — same rule
+        // renderPivotModel uses to decide whether it emitted a subtotal row for this level.
+        const showThisTotal = spec.dimSettings?.[spec.rows[node.level]]?.showTotals ?? showRowSubtotals;
+        if (showThisTotal) r++; // subtotal row
       }
     }
   };
-  walk(model.rowTree);
+  if (spec.rows.length > 0) walk(model.rowTree);
   return out;
 }
 
@@ -527,6 +532,7 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
           <PivotPanel
             fields={pivotInteractive.source.fields}
             spec={pivotSpec}
+            collapsiblePaths={collectCollapsiblePaths(computePivotModel(pivotInteractive.source, pivotSpec))}
             distinctValues={(field) => {
               const seen = new Set<string>();
               for (const row of pivotInteractive.source.rows) {

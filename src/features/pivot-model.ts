@@ -11,13 +11,28 @@
  * left-padding used for imported pivots).
  */
 import { ALIGN_RIGHT, NUMBER_PATTERN } from "./formatting";
-import { evalFormula } from "./pivot-formula";
+import { evalFormula, formulaRefs } from "./pivot-formula";
 import type { Cell, CellStyle, PivotAggregate, PivotFilterCondition, PivotGroupRule, PivotModel, PivotNode, PivotSource, PivotSpec, PivotValueField } from "../core/types";
 
 const SEP = "␟"; // ␟ — a path separator that won't collide with real field values.
 // Dedicated colPath for the row-Total column. A NUL byte can't appear in a stringified
 // cell value, so this never collides with a real (or blank) column-field path.
 export const ROW_TOTAL = "\u0000TOTAL";
+
+// The ONLY two accumulators that aren't O(1) sufficient statistics: MEDIAN keeps the value
+// multiset and COUNTUNIQUE keeps the distinct set. Bound them so a pathological source (millions
+// of distinct values per group) can't blow up memory — no realistic finance pivot approaches
+// these, so exactness is unaffected in practice; past the cap the result becomes a documented
+// lower bound / approximation and a one-shot console warning fires.
+const MEDIAN_MAX_VALUES = 1_000_000;
+const COUNTUNIQUE_MAX_DISTINCT = 1_000_000;
+let pivotBoundWarned = false;
+function warnPivotBound(msg: string): void {
+  if (!pivotBoundWarned) {
+    pivotBoundWarned = true;
+    console.warn(`[pivot] ${msg}`);
+  }
+}
 
 function aggregate(values: number[], agg: PivotAggregate): number {
   const nums = values;
@@ -90,6 +105,8 @@ interface Acc {
   prod: number; // Πx over finite values (for PRODUCT — mergeable; identity 1).
   vals?: number[]; // finite values, tracked ONLY when a value field uses MEDIAN.
   uniq?: Set<string>; // distinct non-empty raw values, ONLY when a field uses COUNTUNIQUE.
+  valsOverflow?: boolean; // MEDIAN sample hit MEDIAN_MAX_VALUES → result is an approximation.
+  uniqOverflow?: boolean; // COUNTUNIQUE distinct set hit COUNTUNIQUE_MAX_DISTINCT → result is a lower bound.
 }
 const newAcc = (needVals = false, needUniq = false): Acc => ({
   sum: 0,
@@ -268,7 +285,13 @@ function pushAcc(a: Acc, raw: unknown): void {
   // COUNTA (a.n) counts NON-EMPTY values only, like Google Sheets — not raw row count. A truly
   // empty cell (null / blank string) does not increment the count.
   if (raw != null && String(raw).trim() !== "") a.n += 1;
-  if (a.uniq && raw != null && String(raw).trim() !== "") a.uniq.add(String(raw));
+  if (a.uniq && raw != null && String(raw).trim() !== "") {
+    if (a.uniq.size < COUNTUNIQUE_MAX_DISTINCT) a.uniq.add(String(raw));
+    else if (!a.uniqOverflow) {
+      a.uniqOverflow = true;
+      warnPivotBound(`COUNTUNIQUE distinct set exceeded ${COUNTUNIQUE_MAX_DISTINCT}; result is a lower bound.`);
+    }
+  }
   const x = toNumber(raw);
   if (Number.isFinite(x)) {
     a.sum += x;
@@ -280,7 +303,13 @@ function pushAcc(a: Acc, raw: unknown): void {
     a.prod *= x;
     if (x < a.min) a.min = x;
     if (x > a.max) a.max = x;
-    a.vals?.push(x);
+    if (a.vals) {
+      if (a.vals.length < MEDIAN_MAX_VALUES) a.vals.push(x);
+      else if (!a.valsOverflow) {
+        a.valsOverflow = true;
+        warnPivotBound(`MEDIAN sample exceeded ${MEDIAN_MAX_VALUES} values; result is approximate.`);
+      }
+    }
   }
 }
 
@@ -308,8 +337,34 @@ function mergeAcc(dst: Acc, src: Acc): void {
   dst.prod *= src.prod;
   if (src.min < dst.min) dst.min = src.min;
   if (src.max > dst.max) dst.max = src.max;
-  if (dst.vals && src.vals) for (const v of src.vals) dst.vals.push(v);
-  if (dst.uniq && src.uniq) for (const u of src.uniq) dst.uniq.add(u);
+  // Propagate overflow flags, and respect the caps during roll-up so a parent (esp. the grand
+  // total) can't re-inflate past the bound — this is where the real O(rows×depth) blowup lives.
+  if (src.valsOverflow) dst.valsOverflow = true;
+  if (src.uniqOverflow) dst.uniqOverflow = true;
+  if (dst.vals && src.vals) {
+    for (const v of src.vals) {
+      if (dst.vals.length >= MEDIAN_MAX_VALUES) {
+        if (!dst.valsOverflow) {
+          dst.valsOverflow = true;
+          warnPivotBound(`MEDIAN sample exceeded ${MEDIAN_MAX_VALUES} values; result is approximate.`);
+        }
+        break;
+      }
+      dst.vals.push(v);
+    }
+  }
+  if (dst.uniq && src.uniq) {
+    for (const u of src.uniq) {
+      if (dst.uniq.size >= COUNTUNIQUE_MAX_DISTINCT) {
+        if (!dst.uniqOverflow) {
+          dst.uniqOverflow = true;
+          warnPivotBound(`COUNTUNIQUE distinct set exceeded ${COUNTUNIQUE_MAX_DISTINCT}; result is a lower bound.`);
+        }
+        break;
+      }
+      dst.uniq.add(u);
+    }
+  }
 }
 
 /** Read the final aggregate out of an accumulator (matches `aggregate()` exactly). */
@@ -378,6 +433,7 @@ export function valueLabel(v: PivotValueField): string {
 
 /** Compute the full pivot tree from a source + spec. */
 export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotModel {
+  pivotBoundWarned = false; // one warning per compute (not per row/group) if a cap is hit below
   // Use ONLY the value fields the user configured. Previously an empty Values list
   // silently invented `count(fields[0])`, which manufactured a constant "Grand Total =
   // row-count" (e.g. 1000) that never reflected the layout — the source of the "pivot
@@ -706,6 +762,34 @@ export interface RenderedPivot {
   columnCount: number;
 }
 
+/**
+ * The number of HEADER rows `renderPivotModel` draws above the pivot body, for a given spec. This
+ * is the single source of truth for header geometry so the on-sheet collapse/expand hit-test
+ * (LevichSheet `collapsibleRowPaths`) stays in exact lockstep with the renderer — they drifted
+ * once when Wave 4c added tiered multi-level column headers + the multi-value measure row.
+ * Layout: with a Columns field the header is 1 field-name row + one row PER column level (tiered)
+ * + a measure-name row ONLY when there is >1 value; with no Columns field it is a single row.
+ */
+export function pivotHeaderRowCount(spec: PivotSpec): number {
+  const colDepth = spec.columns.length;
+  return colDepth === 0 ? 1 : 1 + colDepth + (spec.values.length > 1 ? 1 : 0);
+}
+
+/** Every collapsible row-group path (nodes WITH children) in tree order — for "Collapse all". */
+export function collectCollapsiblePaths(model: PivotModel): string[] {
+  const out: string[] = [];
+  const walk = (nodes: PivotNode[]) => {
+    for (const n of nodes) {
+      if (n.children.length > 0) {
+        out.push(n.path);
+        walk(n.children);
+      }
+    }
+  };
+  walk(model.rowTree);
+  return out;
+}
+
 // Placeholder scaffold shown for a brand-new / cleared pivot — mirrors Google Sheets, which
 // draws "Columns" (B1), "Rows" (A2) and "Values" (B2) on the sheet so the empty pivot reads as
 // a pivot-in-progress rather than a blank grid. Muted so it's clearly a placeholder, not data.
@@ -862,7 +946,12 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
       if (rv !== undefined) anyRef = true;
       return rv;
     });
-    return anyRef && Number.isFinite(out) ? out : undefined;
+    if (!Number.isFinite(out)) return undefined;
+    // Render when the formula resolved to a finite number AND either it referenced a present
+    // measure (anyRef) OR it references NO fields at all (pure constant / function-of-constants,
+    // e.g. `100` or `ROUND(3.14159, 2)`). A formula that names a field ABSENT at this intersection
+    // still blanks (anyRef false while refs exist), preserving the sparse-cell behavior.
+    return anyRef || formulaRefs(v.formula).length === 0 ? out : undefined;
   };
   // "Rank smallest→largest / largest→smallest": rank the LEAF row groups by a value within each
   // column slot, SCOPED PER PARENT row-group (Excel/Sheets rank the innermost items within each

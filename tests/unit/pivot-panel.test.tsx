@@ -23,6 +23,8 @@ import {
   removeField,
   removeFromArea,
   clearAll,
+  collapseAll,
+  expandAll,
   setValueAggregate,
   aggregateOfValue,
 } from "../../src/features/pivot-panel";
@@ -131,6 +133,14 @@ describe("pivot-panel spec helpers", () => {
     expect(empty.columns).toEqual([]);
     expect(empty.values).toEqual([]);
     expect(empty.filters).toEqual([]);
+  });
+
+  it("collapseAll sets collapsed to the given paths (de-duped); expandAll clears it", () => {
+    const spec: PivotSpec = { rows: ["region", "product"], columns: [], values: [{ field: "amt", aggregate: "sum" }] };
+    const collapsed = collapseAll(spec, ["West", "East", "West"]);
+    expect(new Set(collapsed.collapsed)).toEqual(new Set(["West", "East"]));
+    expect(collapsed.rows).toEqual(["region", "product"]); // other areas untouched
+    expect(expandAll(collapsed).collapsed).toEqual([]);
   });
 });
 
