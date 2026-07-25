@@ -249,6 +249,25 @@ describe("<PivotPanel />", () => {
     expect(last.filters[0].condition).toBeDefined();
   });
 
+  it("sets a value field's number format (currency) from the Number-format control", () => {
+    const onChange = vi.fn();
+    render(<PivotPanel fields={fields} spec={baseSpec} onChange={onChange} />);
+    fireEvent.click(screen.getByLabelText("Number format for Amount"));
+    fireEvent.click(screen.getByText("Currency ($1,234.56)"));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0][0].values[0].numFmt).toBe('"$"#,##0.00');
+  });
+
+  it("filters the by-values checklist with the search box", () => {
+    const spec: PivotSpec = { rows: [], columns: [], values: [], filters: [{ field: "Type" }] };
+    render(<PivotPanel fields={["Type"]} spec={spec} onChange={() => {}} distinctValues={() => ["Journal", "Invoice", "Payment"]} />);
+    fireEvent.click(screen.getByText("Showing all items")); // open the checklist
+    expect(screen.getByText("Invoice")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Search Type values"), { target: { value: "jour" } });
+    expect(screen.getByText("Journal")).toBeTruthy();
+    expect(screen.queryByText("Invoice")).toBeNull(); // filtered out
+  });
+
   it("Clear all resets the pivot to empty", () => {
     const onChange = vi.fn();
     render(<PivotPanel fields={fields} spec={baseSpec} onChange={onChange} />);
