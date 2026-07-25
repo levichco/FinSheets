@@ -79,7 +79,13 @@ describe("mapSubtotal", () => {
     expect(mapSubtotal("min")).toBe("min");
     expect(mapSubtotal("max")).toBe("max");
     expect(mapSubtotal(undefined)).toBe("sum"); // Excel default
-    expect(mapSubtotal("product")).toBe("sum"); // unsupported → sum
+    // The engine implements all Excel aggregates — no silent fall-back to sum.
+    expect(mapSubtotal("product")).toBe("product");
+    expect(mapSubtotal("stdDev")).toBe("stdev");
+    expect(mapSubtotal("stdDevp")).toBe("stdevp");
+    expect(mapSubtotal("var")).toBe("var");
+    expect(mapSubtotal("varp")).toBe("varp");
+    expect(mapSubtotal("countUnique")).toBe("countunique");
   });
 });
 

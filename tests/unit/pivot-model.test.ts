@@ -292,6 +292,62 @@ describe("toNumber — the shared numeric parser (also drives Values aggregate a
   });
 });
 
+describe("Wave 1 correctness — (blank) labels, blank column, COUNTA non-empty, count format, columns-only", () => {
+  const src: PivotSource = {
+    fields: ["region", "type", "amount"],
+    rows: [
+      { region: "X", type: "A", amount: 10 },
+      { region: "X", type: "", amount: 20 }, // blank type
+      { region: "", type: "A", amount: 5 }, // blank region
+    ],
+  };
+  const cell = (region: ReturnType<typeof renderPivotModel>, r: number, c: number) => (region.cells[r]?.[c] as { v?: unknown } | undefined)?.v;
+
+  it("renders '(blank)' for an empty ROW group key", () => {
+    const region = renderPivotModel(computePivotModel(src, { rows: ["region"], columns: [], values: [{ field: "amount", aggregate: "sum" }] }));
+    const labels: unknown[] = [];
+    for (let r = 0; r < region.rowCount; r++) labels.push(cell(region, r, 0));
+    expect(labels).toContain("(blank)"); // the empty-region group shows "(blank)", not ""
+    expect(labels).not.toContain(""); // no empty label leaks through as a data row
+  });
+
+  it("keeps a blank COLUMN group and labels it '(blank)' (does not drop it)", () => {
+    const region = renderPivotModel(computePivotModel(src, { rows: ["region"], columns: ["type"], values: [{ field: "amount", aggregate: "sum" }] }));
+    // Column values are A and "" → headers "A" and "(blank)". Row 1 (values header) holds them.
+    const header1: unknown[] = [];
+    for (let c = 0; c < region.columnCount; c++) header1.push(cell(region, 1, c));
+    expect(header1).toContain("A");
+    expect(header1).toContain("(blank)"); // blank column not dropped
+  });
+
+  it("COUNTA counts NON-EMPTY values only (blank cells excluded), like Google Sheets", () => {
+    // 3 rows; the `type` column has one blank → COUNTA of type = 2, not 3.
+    const m = computePivotModel(src, { rows: [], columns: [], values: [{ field: "type", aggregate: "count" }] });
+    expect(m.grand.get(`${ROW_TOTAL}␟0`)).toBe(2);
+  });
+
+  it("count aggregates render as integers (#,##0), not 2 decimals", () => {
+    const region = renderPivotModel(computePivotModel(src, { rows: ["region"], columns: [], values: [{ field: "type", aggregate: "count" }] }));
+    // Find a count cell and check its number pattern has no decimals.
+    let pat: string | undefined;
+    for (let r = 0; r < region.rowCount && !pat; r++)
+      for (let c = 1; c < region.columnCount; c++) {
+        const s = (region.cells[r]?.[c] as { s?: { n?: { pattern?: string } } } | undefined)?.s;
+        if (s?.n?.pattern) { pat = s.n.pattern; break; }
+      }
+    expect(pat).toBe("#,##0");
+  });
+
+  it("columns-only pivot (no rows) renders headers + Grand Total, no synthetic empty row", () => {
+    const region = renderPivotModel(computePivotModel(src, { rows: [], columns: ["type"], values: [{ field: "amount", aggregate: "sum" }] }));
+    const col0: unknown[] = [];
+    for (let r = 0; r < region.rowCount; r++) col0.push(cell(region, r, 0));
+    // The only labelled body row is "Grand Total"; no blank synthetic row-group.
+    expect(col0).toContain("Grand Total");
+    expect(col0.filter((v) => v === "").length).toBeLessThanOrEqual(2); // header corners only
+  });
+});
+
 describe("follow-ups: blank empty intersections + chronological date sort", () => {
   it("leaves an intersection with NO source rows BLANK (not 0), like Google Sheets", () => {
     const src: PivotSource = {

@@ -75,8 +75,9 @@ interface CacheDefXml {
 
 /** Map an Excel pivot `subtotal=` value → our `PivotAggregate`. Excel's default
  *  (absent attribute) is `sum` for numeric fields. `countNums` → countNumbers;
- *  `count` (count of all, incl. text) → count. Unsupported (product/stdDev/var)
- *  fall back to `sum`. */
+ *  `count` (count of all, incl. text) → count. The engine implements every Excel
+ *  aggregate, so product/stdDev/stdDevp/var/varp/countUnique are preserved (no
+ *  silent fall-back to sum). */
 export function mapSubtotal(subtotal: string | undefined): PivotAggregate {
   switch (subtotal) {
     case "count": // countA — count of all values (incl. text)
@@ -89,6 +90,18 @@ export function mapSubtotal(subtotal: string | undefined): PivotAggregate {
       return "min";
     case "max":
       return "max";
+    case "product":
+      return "product";
+    case "stdDev":
+      return "stdev";
+    case "stdDevp":
+      return "stdevp";
+    case "var":
+      return "var";
+    case "varp":
+      return "varp";
+    case "countUnique": // Google Sheets export uses countUnique
+      return "countunique";
     case "sum":
     default:
       return "sum";

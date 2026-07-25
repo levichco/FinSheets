@@ -147,7 +147,9 @@ export function toDate(raw: unknown): number {
 }
 
 function pushAcc(a: Acc, raw: unknown): void {
-  a.n += 1;
+  // COUNTA (a.n) counts NON-EMPTY values only, like Google Sheets — not raw row count. A truly
+  // empty cell (null / blank string) does not increment the count.
+  if (raw != null && String(raw).trim() !== "") a.n += 1;
   if (a.uniq && raw != null && String(raw).trim() !== "") a.uniq.add(String(raw));
   const x = toNumber(raw);
   if (Number.isFinite(x)) {
@@ -567,7 +569,22 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
   // Grand totals need at least one value to total. With rows/columns but no values the
   // pivot lists the distinct labels only (no numeric grand total), like Google Sheets.
   const showGrand = values.length === 0 ? { row: false, column: false } : (spec.showGrandTotals ?? { row: true, column: true });
-  const realCols = colLeaves.filter((c) => c !== "");
+  // Distinct column leaves to render. When a Columns FIELD is present, a blank column-field value
+  // ("") is a real group Google Sheets shows as "(blank)" — so keep it. With NO columns field,
+  // "" is just the single implicit column and carries no header, so drop it.
+  const realCols = spec.columns.length > 0 ? colLeaves.slice() : colLeaves.filter((c) => c !== "");
+  // Google Sheets shows an empty group key (row or column) as the literal "(blank)".
+  const BLANK_LABEL = "(blank)";
+  const showKey = (k: string) => (k === "" ? BLANK_LABEL : k);
+  const showPath = (p: string) =>
+    p
+      .split(SEP)
+      .map(showKey)
+      .join(" / ");
+  // Count aggregates render as integers (no decimals), like Google Sheets; other aggregates keep
+  // the source/number pattern.
+  const isCount = (agg: PivotAggregate) => agg === "count" || agg === "countNumbers" || agg === "countunique";
+  const patternFor = (v: PivotValueField) => v.numFmt ?? (isCount(v.aggregate) ? "#,##0" : NUMBER_PATTERN);
 
   const cells: Record<number, Record<number, Cell>> = {};
   const set = (r: number, c: number, cell: Cell) => {
@@ -607,7 +624,7 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
     set(valRow, 0, { v: spec.rows.join(" / ") || "", s: HEADER_STYLE });
     realCols.forEach((col, ci) => {
       for (let vi = 0; vi < perCol; vi++) set(valRow, dataStart + ci * perCol + vi, { v: "", s: HEADER_STYLE });
-      set(valRow, dataStart + ci * perCol, { v: col.split(SEP).join(" / "), s: HEADER_STYLE });
+      set(valRow, dataStart + ci * perCol, { v: showPath(col), s: HEADER_STYLE });
     });
     if (showGrand.column) for (let vi = 0; vi < nValues; vi++) set(valRow, totalStart + vi, { v: nValues > 1 ? "" : "Grand Total", s: HEADER_STYLE });
     if (showGrand.column && nValues > 1) set(valRow, totalStart, { v: "Grand Total", s: HEADER_STYLE });
@@ -655,14 +672,14 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
           return;
         }
         const { v: out, pct } = showAsCell(raw, col, vi, node);
-        set(row, slot, { v: out, s: numStyle(pct ? PCT_PATTERN : (v.numFmt ?? NUMBER_PATTERN), total) });
+        set(row, slot, { v: out, s: numStyle(pct ? PCT_PATTERN : patternFor(v), total) });
       });
     });
     if (showGrand.column) {
       values.forEach((v, vi) => {
         const raw = node ? node.values.get(cellKey(ROW_TOTAL, vi)) : model.grand.get(cellKey(ROW_TOTAL, vi));
         const { v: out, pct } = showAsCell(raw, ROW_TOTAL, vi, node);
-        set(row, totalStart + vi, { v: out, s: numStyle(pct ? PCT_PATTERN : (v.numFmt ?? NUMBER_PATTERN), true) });
+        set(row, totalStart + vi, { v: out, s: numStyle(pct ? PCT_PATTERN : patternFor(v), true) });
       });
     }
   };
@@ -673,7 +690,7 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
       const isCollapsed = collapsed.has(node.path);
       const chevron = hasChildren ? (isCollapsed ? "▸ " : "▾ ") : "";
       // Group header / leaf row.
-      set(r, 0, { v: `${chevron}${node.key}`, s: indentStyle(node.level, hasChildren ? { bl: 1 } : undefined) });
+      set(r, 0, { v: `${chevron}${showKey(node.key)}`, s: indentStyle(node.level, hasChildren ? { bl: 1 } : undefined) });
       emitValueCells(r, node, false);
       r++;
       if (hasChildren && !isCollapsed) {
@@ -681,14 +698,17 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
         // Per-level "Show totals" (dimSettings), falling back to the global default.
         const showThisTotal = spec.dimSettings?.[spec.rows[node.level]]?.showTotals ?? showRowSubtotals;
         if (showThisTotal) {
-          set(r, 0, { v: `${node.key} Total`, s: indentStyle(node.level, TOTAL_LABEL_STYLE) });
+          set(r, 0, { v: `${showKey(node.key)} Total`, s: indentStyle(node.level, TOTAL_LABEL_STYLE) });
           emitValueCells(r, node, true);
           r++;
         }
       }
     }
   };
-  walk(model.rowTree);
+  // With no Row field, the row tree is a single synthetic empty-key node — Google Sheets renders
+  // no body in that case, just the column headers and a Grand Total row. So only walk when there
+  // is at least one row field.
+  if (spec.rows.length > 0) walk(model.rowTree);
 
   // Grand-total row.
   if (showGrand.row) {
