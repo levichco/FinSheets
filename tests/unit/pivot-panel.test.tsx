@@ -227,6 +227,16 @@ describe("<PivotPanel />", () => {
     expect(onChange.mock.calls[0][0].values).toEqual([{ field: "Status", aggregate: "count" }]);
   });
 
+  it("sets a date group rule from the Group-by control on a Rows card", () => {
+    const onChange = vi.fn();
+    const spec: PivotSpec = { rows: ["Date"], columns: [], values: [] };
+    render(<PivotPanel fields={["Date", "Amount"]} spec={spec} onChange={onChange} />);
+    fireEvent.click(screen.getByLabelText("Group Date by")); // open the Group-by Select
+    fireEvent.click(screen.getByText("Month"));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0][0].dimSettings?.Date?.groupRule).toEqual({ kind: "date", part: "month" });
+  });
+
   it("Clear all resets the pivot to empty", () => {
     const onChange = vi.fn();
     render(<PivotPanel fields={fields} spec={baseSpec} onChange={onChange} />);

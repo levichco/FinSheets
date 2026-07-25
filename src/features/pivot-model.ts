@@ -11,7 +11,7 @@
  * left-padding used for imported pivots).
  */
 import { ALIGN_RIGHT, NUMBER_PATTERN } from "./formatting";
-import type { Cell, CellStyle, PivotAggregate, PivotModel, PivotNode, PivotSource, PivotSpec, PivotValueField } from "../core/types";
+import type { Cell, CellStyle, PivotAggregate, PivotGroupRule, PivotModel, PivotNode, PivotSource, PivotSpec, PivotValueField } from "../core/types";
 
 const SEP = "␟"; // ␟ — a path separator that won't collide with real field values.
 // Dedicated colPath for the row-Total column. A NUL byte can't appear in a stringified
@@ -146,6 +146,64 @@ export function toDate(raw: unknown): number {
   return NaN;
 }
 
+export const PIVOT_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+export const PIVOT_DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/** Apply a "Group by" rule to a raw value → the bucket LABEL (Google Sheets grouping).
+ *  Dates bucket by calendar part; numbers into fixed intervals. "" when not applicable. */
+export function applyGroupRule(raw: unknown, rule: PivotGroupRule): string {
+  if (rule.kind === "number") {
+    const v = toNumber(raw);
+    if (!Number.isFinite(v)) return "";
+    const start = rule.start ?? 0;
+    const size = rule.size > 0 ? rule.size : 1;
+    const lo = start + Math.floor((v - start) / size) * size;
+    return `${lo} – ${lo + size}`;
+  }
+  const ts = toDate(raw);
+  if (!Number.isFinite(ts)) return "";
+  const d = new Date(ts);
+  switch (rule.part) {
+    case "year":
+      return String(d.getUTCFullYear());
+    case "quarter":
+      return "Q" + (Math.floor(d.getUTCMonth() / 3) + 1);
+    case "month":
+      return PIVOT_MONTHS[d.getUTCMonth()];
+    case "yearMonth":
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    case "dayOfWeek":
+      return PIVOT_DAYS[d.getUTCDay()];
+    case "dayOfMonth":
+      return String(d.getUTCDate());
+  }
+}
+
+/** Numeric ordinal for a grouped bucket label so calendar/interval buckets sort in natural order
+ *  (Jan<Feb, Q1<Q2, 0–100<100–200) rather than lexically. undefined = use the normal comparator
+ *  (year / yearMonth / dayOfMonth already sort correctly as numbers/fixed-width strings). */
+export function groupOrdinal(rule: PivotGroupRule | undefined, label: string): number | undefined {
+  if (!rule) return undefined;
+  if (rule.kind === "number") {
+    const lo = parseFloat(label);
+    return Number.isFinite(lo) ? lo : undefined;
+  }
+  switch (rule.part) {
+    case "month": {
+      const i = PIVOT_MONTHS.indexOf(label);
+      return i < 0 ? undefined : i;
+    }
+    case "dayOfWeek": {
+      const i = PIVOT_DAYS.indexOf(label);
+      return i < 0 ? undefined : i;
+    }
+    case "quarter":
+      return label.startsWith("Q") ? Number(label.slice(1)) : undefined;
+    default:
+      return undefined;
+  }
+}
+
 function pushAcc(a: Acc, raw: unknown): void {
   // COUNTA (a.n) counts NON-EMPTY values only, like Google Sheets — not raw row count. A truly
   // empty cell (null / blank string) does not increment the count.
@@ -278,7 +336,10 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
   const seenRowLeaf = new Set<string>();
 
   const pathOf = (r: Record<string, unknown>, fields: string[]): { parts: string[]; path: string } => {
-    const parts = fields.map((f) => String(r[f] ?? ""));
+    const parts = fields.map((f) => {
+      const rule = spec.dimSettings?.[f]?.groupRule;
+      return rule ? applyGroupRule(r[f], rule) : String(r[f] ?? "");
+    });
     return { parts, path: parts.join(SEP) };
   };
 
@@ -393,11 +454,20 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
     if (Number.isFinite(da) && Number.isFinite(db)) return da !== db ? da - db : cmp.compare(a, b);
     return cmp.compare(a, b);
   };
+  // Compare two group labels for a dimension field, honoring a group-by rule's natural ordinal
+  // (month/quarter/day-of-week/number-bucket) before falling back to the numeric/date/text order.
+  const dimCompare = (field: string | undefined, a: string, b: string): number => {
+    const rule = field ? spec.dimSettings?.[field]?.groupRule : undefined;
+    const oa = groupOrdinal(rule, a);
+    const ob = groupOrdinal(rule, b);
+    if (oa !== undefined && ob !== undefined) return oa - ob;
+    return labelCompare(a, b);
+  };
   const sortKeys = (keys: string[], field: string | undefined) => {
     // Google Sheets sorts pivot row/column groups ascending by default; "desc" flips it.
     // (Matches the panel's Order select, which shows "Ascending" when unset.)
     const dir = sortOrderFor(field) === "desc" ? -1 : 1;
-    keys.sort((a, c) => dir * labelCompare(a, c));
+    keys.sort((a, c) => dir * dimCompare(field, a, c));
   };
   // "Sort by": when a dimension's `sortBy` names a VALUE field (not its own label), the
   // sibling groups at that level are ordered by that value's aggregated total instead of by
@@ -473,7 +543,7 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
     for (let lvl = 0; lvl < depth; lvl++) {
       if (pa[lvl] !== pb[lvl]) {
         const dir = sortOrderFor(spec.columns[lvl]) === "desc" ? -1 : 1;
-        return dir * labelCompare(pa[lvl], pb[lvl]);
+        return dir * dimCompare(spec.columns[lvl], pa[lvl], pb[lvl]);
       }
     }
     return pa.length - pb.length;

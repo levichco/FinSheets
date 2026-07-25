@@ -292,6 +292,51 @@ describe("toNumber — the shared numeric parser (also drives Values aggregate a
   });
 });
 
+describe("Wave 2 — date grouping + numeric bucketing (Google Sheets 'Group by')", () => {
+  const dated: PivotSource = {
+    fields: ["d", "amt"],
+    rows: [
+      { d: "2024-01-15", amt: 10 },
+      { d: "2024-01-20", amt: 5 },
+      { d: "2024-02-03", amt: 7 },
+      { d: "2023-12-31", amt: 3 },
+      { d: "2024-03-10", amt: 9 },
+    ],
+  };
+  const keysOf = (spec: PivotSpec) => computePivotModel(dated, spec).rowTree.map((n) => n.key);
+  const totalOf = (spec: PivotSpec, key: string) => {
+    const n = computePivotModel(dated, spec).rowTree.find((x) => x.key === key);
+    return n?.values.get(`${ROW_TOTAL}␟0`);
+  };
+
+  it("groups a date field by MONTH with month-name labels in calendar order (not lexical)", () => {
+    const spec: PivotSpec = { rows: ["d"], columns: [], values: [{ field: "amt", aggregate: "sum" }], dimSettings: { d: { groupRule: { kind: "date", part: "month" } } } };
+    // Buckets: December(3), January(15), February(7), March(9). Calendar order Jan..Dec, but our
+    // data has Dec/Jan/Feb/Mar → sorted by month index: January, February, March, December.
+    expect(keysOf(spec)).toEqual(["January", "February", "March", "December"]);
+    expect(totalOf(spec, "January")).toBe(15); // 10 + 5
+  });
+
+  it("groups by YEAR-MONTH (chronological)", () => {
+    const spec: PivotSpec = { rows: ["d"], columns: [], values: [{ field: "amt", aggregate: "sum" }], dimSettings: { d: { groupRule: { kind: "date", part: "yearMonth" } } } };
+    expect(keysOf(spec)).toEqual(["2023-12", "2024-01", "2024-02", "2024-03"]);
+    expect(totalOf(spec, "2024-01")).toBe(15);
+  });
+
+  it("groups by QUARTER", () => {
+    const spec: PivotSpec = { rows: ["d"], columns: [], values: [{ field: "amt", aggregate: "sum" }], dimSettings: { d: { groupRule: { kind: "date", part: "quarter" } } } };
+    expect(keysOf(spec)).toEqual(["Q1", "Q4"]); // 2024 Q1 (Jan+Feb+Mar), 2023 Q4 (Dec)
+  });
+
+  it("groups a numeric field into fixed-size buckets sorted by lower bound", () => {
+    const src: PivotSource = { fields: ["amt"], rows: [{ amt: 5 }, { amt: 150 }, { amt: 1050 }, { amt: 95 }] };
+    const spec: PivotSpec = { rows: ["amt"], columns: [], values: [{ field: "amt", aggregate: "count" }], dimSettings: { amt: { groupRule: { kind: "number", size: 100 } } } };
+    const keys = computePivotModel(src, spec).rowTree.map((n) => n.key);
+    // 5→"0 – 100", 95→"0 – 100", 150→"100 – 200", 1050→"1000 – 1100"; sorted by lower bound.
+    expect(keys).toEqual(["0 – 100", "100 – 200", "1000 – 1100"]);
+  });
+});
+
 describe("Wave 1 correctness — (blank) labels, blank column, COUNTA non-empty, count format, columns-only", () => {
   const src: PivotSource = {
     fields: ["region", "type", "amount"],
