@@ -536,12 +536,18 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
               return [...seen].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
             }}
             defaultAggregate={(field) => {
-              // Google-Sheets rule: a Values field defaults to SUM only for a (mostly) numeric
-              // column; text/date/mixed columns default to COUNTA ("count") so they render real
-              // counts instead of a nonsensical SUM that shows 0 everywhere.
-              // Probe with the SAME parser the SUM engine uses (toNumber — handles $£€¥,
-              // thousands separators, accounting "(n)" negatives, trailing %), so a genuinely
-              // numeric column formatted in accounting/GBP/EUR style isn't misread as text.
+              // Google-Sheets rule (from the pivot-engine behavior, corroborated across GS/Excel):
+              //  1. If the field is ALSO used as a Row or Column grouping field, the value defaults
+              //     to COUNTA — the cross-tab is sparse (the field's own value fixes each cell), so
+              //     summing is degenerate and Sheets tallies instead. (rows=Date, cols=Amount,
+              //     values=Amount → COUNTA of Amount, matching Google Sheets.)
+              //  2. Otherwise a (mostly) numeric column → SUM; text/date/mixed → COUNTA (so a text
+              //     column shows real counts, not a nonsensical 0-filled SUM).
+              const spec = specRef.current;
+              if (spec && (spec.rows.includes(field) || spec.columns.includes(field))) return "count";
+              // Probe with the SAME parser the SUM engine uses (toNumber — handles $£€¥, thousands
+              // separators, accounting "(n)" negatives, trailing %) so a numeric column in
+              // accounting/GBP/EUR style isn't misread as text.
               let numeric = 0;
               let seen = 0;
               for (const row of pivotInteractive.source.rows) {

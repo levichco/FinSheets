@@ -351,11 +351,18 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
   // "Order" (asc/desc) per dimension field — sort a node's children by their label.
   const cmp = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
   const sortOrderFor = (field: string | undefined): "asc" | "desc" | undefined => (field ? spec.dimSettings?.[field]?.order : undefined);
+  // Numeric-aware label comparison: numeric values (incl. $/£/€ + accounting negatives, via
+  // toNumber) sort by magnitude like Google Sheets; everything else uses the locale collator.
+  const labelCompare = (a: string, b: string): number => {
+    const na = toNumber(a);
+    const nb = toNumber(b);
+    return Number.isFinite(na) && Number.isFinite(nb) ? na - nb : cmp.compare(a, b);
+  };
   const sortKeys = (keys: string[], field: string | undefined) => {
     // Google Sheets sorts pivot row/column groups ascending by default; "desc" flips it.
     // (Matches the panel's Order select, which shows "Ascending" when unset.)
-    const ord = sortOrderFor(field);
-    keys.sort((a, c) => (ord === "desc" ? -cmp.compare(a, c) : cmp.compare(a, c)));
+    const dir = sortOrderFor(field) === "desc" ? -1 : 1;
+    keys.sort((a, c) => dir * labelCompare(a, c));
   };
   // "Sort by": when a dimension's `sortBy` names a VALUE field (not its own label), the
   // sibling groups at that level are ordered by that value's aggregated total instead of by
@@ -419,19 +426,35 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
   for (const col of colLeaves) for (let vi = 0; vi < nValues; vi++) { const k = cellKey(col, vi); if (!grand.has(k)) grand.set(k, aggregate([], values[vi].aggregate)); }
   for (let vi = 0; vi < nValues; vi++) { const k = cellKey(ROW_TOTAL, vi); if (!grand.has(k)) grand.set(k, aggregate([], values[vi].aggregate)); }
 
-  // 6. Column "Sort by" (value-based): order the column leaves within each parent group by
-  // the chosen value's grand total. Parent groups keep their established (label) order so
-  // nested column headers stay contiguous; only siblings under a shared prefix are reordered.
+  // 6a. Column ORDER (Ascending/Descending) — sort the column leaves hierarchically, honoring
+  // each column level's own Order (Google Sheets orders every axis independently). Without this
+  // the columns followed raw data-appearance order and the Order control did nothing (the #37
+  // bug). Numeric-aware so a numeric Columns field (e.g. Amount) sorts by value like Sheets.
+  const colLabelCmp = (a: string, b: string): number => {
+    const pa = a.split(SEP);
+    const pb = b.split(SEP);
+    const depth = Math.min(pa.length, pb.length);
+    for (let lvl = 0; lvl < depth; lvl++) {
+      if (pa[lvl] !== pb[lvl]) {
+        const dir = sortOrderFor(spec.columns[lvl]) === "desc" ? -1 : 1;
+        return dir * labelCompare(pa[lvl], pb[lvl]);
+      }
+    }
+    return pa.length - pb.length;
+  };
+  let orderedColLeaves = [...colLeaves].sort(colLabelCmp);
+
+  // 6b. Column "Sort by" (value-based): within each parent group, reorder the leaves by the
+  // chosen value's grand total (the label order from 6a is the fallback / tie-break).
   const colDimField = spec.columns[spec.columns.length - 1];
   const colSortVi = valueSortIndex(colDimField);
-  let orderedColLeaves = colLeaves;
-  if (colSortVi >= 0 && colLeaves.length > 1) {
+  if (colSortVi >= 0 && orderedColLeaves.length > 1) {
     const ord = sortOrderFor(colDimField) === "desc" ? -1 : 1;
     const parentOf = (leaf: string) => { const i = leaf.lastIndexOf(SEP); return i < 0 ? "" : leaf.slice(0, i); };
     const totOf = (leaf: string) => (grand.get(cellKey(leaf, colSortVi)) ?? 0) as number;
     const groups: string[][] = [];
     const groupIdx = new Map<string, number>();
-    for (const leaf of colLeaves) {
+    for (const leaf of orderedColLeaves) {
       const p = parentOf(leaf);
       let gi = groupIdx.get(p);
       if (gi === undefined) { gi = groups.length; groupIdx.set(p, gi); groups.push([]); }

@@ -292,6 +292,34 @@ describe("toNumber — the shared numeric parser (also drives Values aggregate a
   });
 });
 
+describe("column ORDER (Ascending/Descending) — #37: the Order control must re-sort columns", () => {
+  it("sorts column leaves ascending by default and descending when Order=desc", () => {
+    const asc = computePivotModel(source, { rows: ["region"], columns: ["product"], values: [{ field: "amount", aggregate: "sum" }] });
+    expect(asc.colLeaves).toEqual(["A", "B"]);
+    const desc = computePivotModel(source, {
+      rows: ["region"],
+      columns: ["product"],
+      values: [{ field: "amount", aggregate: "sum" }],
+      dimSettings: { product: { order: "desc" } },
+    });
+    expect(desc.colLeaves).toEqual(["B", "A"]);
+  });
+
+  it("sorts a NUMERIC column field by value, not lexically (matches Google Sheets)", () => {
+    const src: PivotSource = {
+      fields: ["r", "amt"],
+      rows: [
+        { r: "x", amt: 100 },
+        { r: "x", amt: 9 },
+        { r: "x", amt: 30 },
+      ],
+    };
+    const m = computePivotModel(src, { rows: ["r"], columns: ["amt"], values: [{ field: "amt", aggregate: "count" }] });
+    // 9 < 30 < 100 numerically (lexical string sort would give "100","30","9").
+    expect(m.colLeaves).toEqual(["9", "30", "100"]);
+  });
+});
+
 describe("header labeling (Google-Sheets) — column FIELD NAME on top, distinct VALUES below (no duplication)", () => {
   it("rows + columns + one value: row0 = column field name, row1 = column values (not a numeric duplicate)", () => {
     const m = computePivotModel(source, { rows: ["region"], columns: ["product"], values: [{ field: "amount", aggregate: "sum" }] });
