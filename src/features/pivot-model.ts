@@ -11,6 +11,7 @@
  * left-padding used for imported pivots).
  */
 import { ALIGN_RIGHT, NUMBER_PATTERN } from "./formatting";
+import { evalFormula } from "./pivot-formula";
 import type { Cell, CellStyle, PivotAggregate, PivotFilterCondition, PivotGroupRule, PivotModel, PivotNode, PivotSource, PivotSpec, PivotValueField } from "../core/types";
 
 const SEP = "␟"; // ␟ — a path separator that won't collide with real field values.
@@ -332,6 +333,7 @@ function readAcc(a: Acc, agg: PivotAggregate): number {
 /** Default header label for a value field, e.g. "Sum of Amount". */
 export function valueLabel(v: PivotValueField): string {
   if (v.label) return v.label;
+  if (v.aggregate === "custom") return v.field || "Calculated field";
   const verb: Record<PivotAggregate, string> = {
     sum: "Sum",
     count: "COUNTA",
@@ -346,6 +348,7 @@ export function valueLabel(v: PivotValueField): string {
     stdevp: "STDEVP",
     var: "VAR",
     varp: "VARP",
+    custom: "Custom",
   };
   return `${verb[v.aggregate]} of ${v.field}`;
 }
@@ -823,12 +826,35 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
     const den = mode === "pctOfRow" ? rowTot : mode === "pctOfCol" ? colTot : mode === "pctOfParentRow" ? parentTot : grandTot;
     return { v: den ? raw / den : 0, pct: true };
   };
+  // Calculated fields: map a value-field NAME → its index (non-custom only, so a formula can't
+  // reference another custom field). `cellValueOf` returns a cell's value — for a custom field it
+  // evaluates the formula by substituting the referenced value fields' aggregates at the same
+  // intersection; undefined (blank) when no referenced measure is present or the formula errors.
+  const valueVi = new Map<string, number>();
+  values.forEach((v, vi) => {
+    if (v.aggregate !== "custom" && !valueVi.has(v.field)) valueVi.set(v.field, vi);
+  });
+  const cellValueOf = (node: PivotNode | null, colPath: string, vi: number): number | undefined => {
+    const v = values[vi];
+    const src = node ? node.values : model.grand;
+    if (v.aggregate !== "custom") return src.get(cellKey(colPath, vi));
+    if (!v.formula) return undefined;
+    let anyRef = false;
+    const out = evalFormula(v.formula, (name) => {
+      const rvi = valueVi.get(name);
+      if (rvi === undefined) return undefined;
+      const rv = src.get(cellKey(colPath, rvi));
+      if (rv !== undefined) anyRef = true;
+      return rv;
+    });
+    return anyRef && Number.isFinite(out) ? out : undefined;
+  };
   // `accumulate` controls whether a "running total" cell adds to its column's running sum (true
   // for leaf data rows) or just peeks the current cumulative (group headers / subtotals / grand).
   const emitValueCells = (row: number, node: PivotNode | null, total: boolean, parent?: PivotNode | null, accumulate = true) => {
     realCols.forEach((col, ci) => {
       values.forEach((v, vi) => {
-        const raw = node ? node.values.get(cellKey(col, vi)) : model.grand.get(cellKey(col, vi));
+        const raw = cellValueOf(node, col, vi);
         const slot = dataStart + ci * perCol + vi;
         // Absent intersection (no source rows) → BLANK, like Google Sheets (not 0.00). A genuine
         // aggregate of 0 (e.g. SUM of a $0.00 column that HAS rows) is present, so it still shows.
@@ -842,7 +868,11 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
     });
     if (showGrand.column) {
       values.forEach((v, vi) => {
-        const raw = node ? node.values.get(cellKey(ROW_TOTAL, vi)) : model.grand.get(cellKey(ROW_TOTAL, vi));
+        const raw = cellValueOf(node, ROW_TOTAL, vi);
+        if (raw === undefined) {
+          set(row, totalStart + vi, { v: "", s: TOTAL_LABEL_STYLE });
+          return;
+        }
         // Apply Show-as to the row-Total column too (for a NO-columns pivot this IS the value
         // column). Running total accumulates its own down-the-rows sum here (keyed by ROW_TOTAL).
         const { v: out, pct } = showAsCell(raw, ROW_TOTAL, vi, node, parent, accumulate);

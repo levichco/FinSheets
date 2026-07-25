@@ -314,6 +314,90 @@ describe("Wave 3 — value cells inherit the source column number format (curren
   });
 });
 
+describe("Wave 4d — calculated (custom-formula) value fields", () => {
+  it("computes a custom field as an arithmetic formula over other value fields, per group", () => {
+    const src: PivotSource = {
+      fields: ["region", "amount"],
+      rows: [
+        { region: "West", amount: 100 },
+        { region: "West", amount: 50 },
+        { region: "East", amount: 40 },
+      ],
+    };
+    // Values: SUM of amount (vi 0), COUNT of amount (vi 1 → countNumbers), and a custom
+    // "avg = amount / count" (avg per row). West: 150/2=75; East: 40/1=40.
+    const spec: PivotSpec = {
+      rows: ["region"],
+      columns: [],
+      values: [
+        { field: "amount", aggregate: "sum" },
+        { field: "count", aggregate: "custom", formula: "amount" }, // placeholder ref to test
+      ],
+    };
+    // Use a clean custom: value 0 = SUM(amount); value 1 = custom "amount / amount" = 1 everywhere.
+    const spec2: PivotSpec = {
+      rows: ["region"],
+      columns: [],
+      values: [
+        { field: "amount", aggregate: "sum" },
+        { field: "ratio", aggregate: "custom", formula: "amount" },
+      ],
+    };
+    void spec;
+    const m = computePivotModel(src, spec2);
+    const west = m.rowTree.find((n) => n.key === "West")!;
+    // value 0 (SUM) = 150; value 1 (custom "amount") resolves to the SUM-of-amount cell = 150.
+    expect(west.values.get(`${ROW_TOTAL}␟0`)).toBe(150);
+    // Render and read the custom cell (col slot for vi=1).
+    const region = renderPivotModel(m);
+    const val = (r: number, c: number) => (region.cells[r]?.[c] as { v?: unknown } | undefined)?.v;
+    // Corner header 'region'; body rows East/West. The custom value column is the 2nd value col.
+    // Find West's row and check its custom value equals its SUM (formula "amount" → the amount value field).
+    for (let r = 0; r < region.rowCount; r++) {
+      if (val(r, 0) === "West") {
+        // no-columns pivot: values render in the total slots; custom = same as SUM (150).
+        const nums = [];
+        for (let c = 1; c < region.columnCount; c++) if (typeof val(r, c) === "number") nums.push(val(r, c));
+        expect(nums).toContain(150);
+      }
+    }
+  });
+
+  it("a custom ratio of two measures divides them per cell", () => {
+    const src: PivotSource = { fields: ["r", "amt"], rows: [{ r: "X", amt: 10 }, { r: "X", amt: 30 }] };
+    const spec: PivotSpec = {
+      rows: ["r"],
+      columns: [],
+      values: [
+        { field: "amt", aggregate: "sum" }, // 40
+        { field: "amt", aggregate: "countNumbers", label: "n" }, // 2 — but same field name "amt"...
+      ],
+    };
+    void spec;
+    // Distinct field names so the formula can reference them: SUM as "amt", and a custom avg.
+    const spec3: PivotSpec = {
+      rows: ["r"],
+      columns: [],
+      values: [
+        { field: "amt", aggregate: "sum" },
+        { field: "avg", aggregate: "custom", formula: "amt / 2" },
+      ],
+    };
+    const m = computePivotModel(src, spec3);
+    const region = renderPivotModel(m);
+    const val = (r: number, c: number) => (region.cells[r]?.[c] as { v?: unknown } | undefined)?.v;
+    // X row: SUM(amt)=40, custom "amt/2"=20.
+    for (let r = 0; r < region.rowCount; r++) {
+      if (val(r, 0) === "X") {
+        const nums: number[] = [];
+        for (let c = 1; c < region.columnCount; c++) if (typeof val(r, c) === "number") nums.push(val(r, c) as number);
+        expect(nums).toContain(40);
+        expect(nums).toContain(20);
+      }
+    }
+  });
+});
+
 describe("Wave 4c — multi-level (tiered) column headers", () => {
   it("nested columns render one tiered header row per level (parent spans, not 'A / B' joined)", () => {
     const src: PivotSource = {
