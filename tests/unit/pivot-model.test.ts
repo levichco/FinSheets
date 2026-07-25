@@ -292,6 +292,40 @@ describe("toNumber — the shared numeric parser (also drives Values aggregate a
   });
 });
 
+describe("follow-ups: blank empty intersections + chronological date sort", () => {
+  it("leaves an intersection with NO source rows BLANK (not 0), like Google Sheets", () => {
+    const src: PivotSource = {
+      fields: ["r", "p", "amt"],
+      rows: [
+        { r: "X", p: "A", amt: 10 },
+        { r: "Y", p: "B", amt: 20 },
+      ],
+    };
+    const region = renderPivotModel(computePivotModel(src, { rows: ["r"], columns: ["p"], values: [{ field: "amt", aggregate: "sum" }] }));
+    const val = (r: number, c: number) => (region.cells[r]?.[c] as { v?: unknown } | undefined)?.v;
+    // Header: row0 = "p", row1 = "r" | A | B | Grand Total. Data: row2 = X, row3 = Y. cols A=1, B=2, total=3.
+    expect(val(2, 1)).toBe(10); // X × A has data
+    expect(val(2, 2)).toBe(""); // X × B has NO rows → blank (not 0)
+    expect(val(3, 1)).toBe(""); // Y × A has NO rows → blank
+    expect(val(3, 2)).toBe(20); // Y × B has data
+    expect(val(2, 3)).toBe(10); // row totals stay present (genuine numbers)
+    expect(val(3, 3)).toBe(20);
+  });
+
+  it("sorts DATE row labels CHRONOLOGICALLY, not lexically (matches Google Sheets)", () => {
+    const src: PivotSource = { fields: ["d"], rows: [{ d: "12/31/2019" }, { d: "01/01/2020" }, { d: "02/15/2020" }] };
+    const keys = computePivotModel(src, { rows: ["d"], columns: [], values: [] }).rowTree.map((n) => n.key);
+    // Chronological: 12/31/2019 < 01/01/2020 < 02/15/2020 (lexical would wrongly put 01/01/2020 first).
+    expect(keys).toEqual(["12/31/2019", "01/01/2020", "02/15/2020"]);
+  });
+
+  it("sorts ISO date labels chronologically too", () => {
+    const src: PivotSource = { fields: ["d"], rows: [{ d: "2020-02-15" }, { d: "2019-12-31" }, { d: "2020-01-01" }] };
+    const keys = computePivotModel(src, { rows: ["d"], columns: [], values: [] }).rowTree.map((n) => n.key);
+    expect(keys).toEqual(["2019-12-31", "2020-01-01", "2020-02-15"]);
+  });
+});
+
 describe("column ORDER (Ascending/Descending) — #37: the Order control must re-sort columns", () => {
   it("sorts column leaves ascending by default and descending when Order=desc", () => {
     const asc = computePivotModel(source, { rows: ["region"], columns: ["product"], values: [{ field: "amount", aggregate: "sum" }] });

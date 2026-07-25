@@ -120,6 +120,32 @@ export function toNumber(raw: unknown): number {
   return Number.isFinite(n) ? (pct ? n / 100 : n) : NaN;
 }
 
+/**
+ * Parse a date-like label to a sortable UTC timestamp, or NaN if it isn't a recognisable date.
+ * Used so pivot row/column groups of dates sort CHRONOLOGICALLY (like Google Sheets) instead of
+ * lexically ("01/01/2020" before "12/31/2019"). Handles ISO `YYYY-MM-DD` and US `MM/DD/YYYY`
+ * (month validated ≤ 12 so a `DD/MM` value that isn't a valid MM/DD falls back to text sorting).
+ */
+export function toDate(raw: unknown): number {
+  if (typeof raw !== "string") return NaN;
+  const s = raw.trim();
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ]|$)/.exec(s); // ISO
+  if (m) {
+    const y = +m[1];
+    const mo = +m[2];
+    const d = +m[3];
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) return Date.UTC(y, mo - 1, d);
+  }
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s); // US MM/DD/YYYY
+  if (m) {
+    const mo = +m[1];
+    const d = +m[2];
+    const y = +m[3];
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) return Date.UTC(y, mo - 1, d);
+  }
+  return NaN;
+}
+
 function pushAcc(a: Acc, raw: unknown): void {
   a.n += 1;
   if (a.uniq && raw != null && String(raw).trim() !== "") a.uniq.add(String(raw));
@@ -359,6 +385,10 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
     // Numeric magnitude when both parse; on a numeric TIE (e.g. "001" vs "1") fall back to the
     // collator so textually-distinct-but-numerically-equal codes keep a stable, lexical order.
     if (Number.isFinite(na) && Number.isFinite(nb)) return na !== nb ? na - nb : cmp.compare(a, b);
+    // Dates sort CHRONOLOGICALLY, not lexically (Google Sheets), when both parse as dates.
+    const da = toDate(a);
+    const db = toDate(b);
+    if (Number.isFinite(da) && Number.isFinite(db)) return da !== db ? da - db : cmp.compare(a, b);
     return cmp.compare(a, b);
   };
   const sortKeys = (keys: string[], field: string | undefined) => {
@@ -411,9 +441,10 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
     const orderedChildren = applyValueSort(children, spec.rows[b.level + 1]);
     const node: PivotNode = { key: b.key, path: b.path, level: b.level, children: orderedChildren, values: new Map() };
     for (const [col, grp] of b.acc) for (let vi = 0; vi < nValues; vi++) node.values.set(cellKey(col, vi), readAcc(grp[vi], values[vi].aggregate));
-    // Guarantee zero-filled cells for every (col,value) even if this node had no
-    // data for that column (preserves the previous behaviour where aggFor→0).
-    for (const col of colLeaves) for (let vi = 0; vi < nValues; vi++) { const k = cellKey(col, vi); if (!node.values.has(k)) node.values.set(k, aggregate([], values[vi].aggregate)); }
+    // NOTE: data columns are intentionally NOT zero-filled — an intersection with no underlying
+    // source rows stays ABSENT so the renderer leaves it BLANK (Google Sheets shows empty, not
+    // 0.00, for sparse cross-tabs). Only the row-Total is guaranteed present (a real row group
+    // always has ≥1 observation, so its total is a genuine number).
     for (let vi = 0; vi < nValues; vi++) { const k = cellKey(ROW_TOTAL, vi); if (!node.values.has(k)) node.values.set(k, aggregate([], values[vi].aggregate)); }
     return node;
   };
@@ -616,8 +647,15 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
     realCols.forEach((col, ci) => {
       values.forEach((v, vi) => {
         const raw = node ? node.values.get(cellKey(col, vi)) : model.grand.get(cellKey(col, vi));
+        const slot = dataStart + ci * perCol + vi;
+        // Absent intersection (no source rows) → BLANK, like Google Sheets (not 0.00). A genuine
+        // aggregate of 0 (e.g. SUM of a $0.00 column that HAS rows) is present, so it still shows.
+        if (raw === undefined) {
+          set(row, slot, { v: "", s: total ? TOTAL_LABEL_STYLE : undefined });
+          return;
+        }
         const { v: out, pct } = showAsCell(raw, col, vi, node);
-        set(row, dataStart + ci * perCol + vi, { v: out, s: numStyle(pct ? PCT_PATTERN : (v.numFmt ?? NUMBER_PATTERN), total) });
+        set(row, slot, { v: out, s: numStyle(pct ? PCT_PATTERN : (v.numFmt ?? NUMBER_PATTERN), total) });
       });
     });
     if (showGrand.column) {
