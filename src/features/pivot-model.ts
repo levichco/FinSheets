@@ -11,7 +11,7 @@
  * left-padding used for imported pivots).
  */
 import { ALIGN_RIGHT, NUMBER_PATTERN } from "./formatting";
-import type { Cell, CellStyle, PivotAggregate, PivotGroupRule, PivotModel, PivotNode, PivotSource, PivotSpec, PivotValueField } from "../core/types";
+import type { Cell, CellStyle, PivotAggregate, PivotFilterCondition, PivotGroupRule, PivotModel, PivotNode, PivotSource, PivotSpec, PivotValueField } from "../core/types";
 
 const SEP = "␟"; // ␟ — a path separator that won't collide with real field values.
 // Dedicated colPath for the row-Total column. A NUL byte can't appear in a stringified
@@ -144,6 +144,48 @@ export function toDate(raw: unknown): number {
     if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) return Date.UTC(y, mo - 1, d);
   }
   return NaN;
+}
+
+/** Evaluate a Google-Sheets "Filter by condition" predicate against a raw cell value. */
+export function matchesCondition(raw: unknown, cond: PivotFilterCondition): boolean {
+  const empty = raw == null || String(raw).trim() === "";
+  switch (cond.type) {
+    case "isEmpty":
+      return empty;
+    case "isNotEmpty":
+      return !empty;
+    case "textContains":
+      return String(raw ?? "").toLowerCase().includes(cond.value.toLowerCase());
+    case "textNotContains":
+      return !String(raw ?? "").toLowerCase().includes(cond.value.toLowerCase());
+    case "textStartsWith":
+      return String(raw ?? "").toLowerCase().startsWith(cond.value.toLowerCase());
+    case "textEndsWith":
+      return String(raw ?? "").toLowerCase().endsWith(cond.value.toLowerCase());
+    case "textEq":
+      return String(raw ?? "").toLowerCase() === cond.value.toLowerCase();
+    default: {
+      // Numeric conditions — compare via the same parser the SUM engine uses.
+      const n = toNumber(raw);
+      if (!Number.isFinite(n)) return false;
+      switch (cond.type) {
+        case "gt":
+          return n > cond.value;
+        case "gte":
+          return n >= cond.value;
+        case "lt":
+          return n < cond.value;
+        case "lte":
+          return n <= cond.value;
+        case "eq":
+          return n === cond.value;
+        case "neq":
+          return n !== cond.value;
+        case "between":
+          return n >= cond.value && n <= cond.value2;
+      }
+    }
+  }
 }
 
 export const PIVOT_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -317,9 +359,17 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
   // the row/column labels (Google-Sheets behavior).
   const values = spec.values;
 
-  // 1. Filter rows.
+  // 1. Filter rows — "by values" (include list) AND/OR "by condition" predicate. Both run BEFORE
+  // aggregation, so a filter changes totals (Google-Sheets semantics), not just visibility.
   const filters = spec.filters ?? [];
-  const rows = source.rows.filter((r) => filters.every((f) => !f.include || f.include.includes(String(r[f.field] ?? ""))));
+  const rows = source.rows.filter((r) =>
+    filters.every((f) => {
+      const raw = r[f.field];
+      if (f.include && !f.include.includes(String(raw ?? ""))) return false;
+      if (f.condition && !matchesCondition(raw, f.condition)) return false;
+      return true;
+    }),
+  );
 
   const nValues = values.length;
   // MEDIAN needs the value multiset + COUNTUNIQUE the distinct set — track them per value

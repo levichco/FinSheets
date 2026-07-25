@@ -237,6 +237,18 @@ describe("<PivotPanel />", () => {
     expect(onChange.mock.calls[0][0].dimSettings?.Date?.groupRule).toEqual({ kind: "date", part: "month" });
   });
 
+  it("sets a filter-by-condition on a Filters field", () => {
+    const onChange = vi.fn();
+    const spec: PivotSpec = { rows: [], columns: [], values: [], filters: [{ field: "Amount" }] };
+    render(<PivotPanel fields={["Amount"]} spec={spec} onChange={onChange} />);
+    fireEvent.click(screen.getByLabelText("Filter Amount by condition")); // open the condition Select
+    fireEvent.click(screen.getByText("Greater than")); // pick a numeric condition
+    expect(onChange).toHaveBeenCalled();
+    // Greater-than with no value yet resolves to the isNotEmpty placeholder until a number is typed.
+    const last = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(last.filters[0].condition).toBeDefined();
+  });
+
   it("Clear all resets the pivot to empty", () => {
     const onChange = vi.fn();
     render(<PivotPanel fields={fields} spec={baseSpec} onChange={onChange} />);

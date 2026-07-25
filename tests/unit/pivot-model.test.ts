@@ -292,6 +292,49 @@ describe("toNumber — the shared numeric parser (also drives Values aggregate a
   });
 });
 
+describe("Wave 3 — filter by condition (applied before aggregation, changes totals)", () => {
+  const src: PivotSource = {
+    fields: ["region", "type", "amount"],
+    rows: [
+      { region: "West", type: "Journal", amount: 100 },
+      { region: "East", type: "Invoice", amount: 50 },
+      { region: "West", type: "Journal", amount: 30 },
+      { region: "East", type: "", amount: 999 }, // blank type
+    ],
+  };
+  const grand = (spec: PivotSpec) => computePivotModel(src, spec).grand.get(`${ROW_TOTAL}␟0`);
+
+  it("numeric 'greater than' filters rows before aggregation", () => {
+    const spec: PivotSpec = { rows: [], columns: [], values: [{ field: "amount", aggregate: "sum" }], filters: [{ field: "amount", condition: { type: "gt", value: 40 } }] };
+    // Keeps 100, 50, 999 (>40); drops 30 → sum 1149.
+    expect(grand(spec)).toBe(1149);
+  });
+
+  it("text 'contains' filters (case-insensitive)", () => {
+    const spec: PivotSpec = { rows: [], columns: [], values: [{ field: "amount", aggregate: "sum" }], filters: [{ field: "type", condition: { type: "textContains", value: "jour" } }] };
+    // Only "Journal" rows (100 + 30) = 130.
+    expect(grand(spec)).toBe(130);
+  });
+
+  it("'is not empty' drops blank-value rows", () => {
+    const spec: PivotSpec = { rows: [], columns: [], values: [{ field: "amount", aggregate: "sum" }], filters: [{ field: "type", condition: { type: "isNotEmpty" } }] };
+    // Drops the blank-type row (999) → 100 + 50 + 30 = 180.
+    expect(grand(spec)).toBe(180);
+  });
+
+  it("'between' filters an inclusive numeric range", () => {
+    const spec: PivotSpec = { rows: [], columns: [], values: [{ field: "amount", aggregate: "sum" }], filters: [{ field: "amount", condition: { type: "between", value: 30, value2: 100 } }] };
+    // Keeps 100, 50, 30 (30..100); drops 999 → 180.
+    expect(grand(spec)).toBe(180);
+  });
+
+  it("combines a condition with a by-values include (both must pass)", () => {
+    const spec: PivotSpec = { rows: [], columns: [], values: [{ field: "amount", aggregate: "sum" }], filters: [{ field: "region", include: ["West"], condition: undefined }, { field: "amount", condition: { type: "gt", value: 50 } }] };
+    // region=West (100, 30) AND amount>50 → only 100.
+    expect(grand(spec)).toBe(100);
+  });
+});
+
 describe("Wave 2 — date grouping + numeric bucketing (Google Sheets 'Group by')", () => {
   const dated: PivotSource = {
     fields: ["d", "amt"],
