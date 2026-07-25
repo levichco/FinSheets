@@ -787,18 +787,35 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
 
   // Body rows: walk the row tree depth-first, emitting a row per node (+ subtotal when it has children).
   let r = headerRows;
-  // "Show as": re-express a raw cell as a % of its row total / column total / grand total.
+  // "Show as": re-express a raw cell as a % of its row/column/grand/parent total, or a running
+  // total accumulated down the rows. Running total keeps per-(column) state across the walk.
   const PCT_PATTERN = "0.0%";
-  const showAsCell = (raw: number | undefined, colPath: string, vi: number, node: PivotNode | null): { v: number; pct: boolean } => {
+  const runningTotals = new Map<string, number>();
+  const showAsCell = (raw: number | undefined, colPath: string, vi: number, node: PivotNode | null, parent?: PivotNode | null, accumulate = true): { v: number; pct: boolean } => {
     const mode = values[vi].showAs ?? "default";
     if (mode === "default" || raw == null) return { v: raw ?? 0, pct: false };
+    if (mode === "runningTotal") {
+      // Cumulative sum down the (leaf) rows for this column slot; group/subtotal rows peek without
+      // adding (so a subtotal doesn't double-count its children).
+      const k = cellKey(colPath, vi);
+      const cur = runningTotals.get(k) ?? 0;
+      if (!accumulate) return { v: cur, pct: false };
+      const next = cur + raw;
+      runningTotals.set(k, next);
+      return { v: next, pct: false };
+    }
     const rowTot = (node ? node.values.get(cellKey(ROW_TOTAL, vi)) : model.grand.get(cellKey(ROW_TOTAL, vi))) ?? 0;
     const colTot = model.grand.get(cellKey(colPath, vi)) ?? 0;
     const grandTot = model.grand.get(cellKey(ROW_TOTAL, vi)) ?? 0;
-    const den = mode === "pctOfRow" ? rowTot : mode === "pctOfCol" ? colTot : grandTot;
+    // "% of parent row" = value as a fraction of the PARENT row-group's grand total (nested rows);
+    // at the top level the parent is the grand total.
+    const parentTot = (parent ? parent.values.get(cellKey(ROW_TOTAL, vi)) : model.grand.get(cellKey(ROW_TOTAL, vi))) ?? 0;
+    const den = mode === "pctOfRow" ? rowTot : mode === "pctOfCol" ? colTot : mode === "pctOfParentRow" ? parentTot : grandTot;
     return { v: den ? raw / den : 0, pct: true };
   };
-  const emitValueCells = (row: number, node: PivotNode | null, total: boolean) => {
+  // `accumulate` controls whether a "running total" cell adds to its column's running sum (true
+  // for leaf data rows) or just peeks the current cumulative (group headers / subtotals / grand).
+  const emitValueCells = (row: number, node: PivotNode | null, total: boolean, parent?: PivotNode | null, accumulate = true) => {
     realCols.forEach((col, ci) => {
       values.forEach((v, vi) => {
         const raw = node ? node.values.get(cellKey(col, vi)) : model.grand.get(cellKey(col, vi));
@@ -809,35 +826,38 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
           set(row, slot, { v: "", s: total ? TOTAL_LABEL_STYLE : undefined });
           return;
         }
-        const { v: out, pct } = showAsCell(raw, col, vi, node);
+        const { v: out, pct } = showAsCell(raw, col, vi, node, parent, accumulate);
         set(row, slot, { v: out, s: numStyle(pct ? PCT_PATTERN : patternFor(v), total) });
       });
     });
     if (showGrand.column) {
       values.forEach((v, vi) => {
         const raw = node ? node.values.get(cellKey(ROW_TOTAL, vi)) : model.grand.get(cellKey(ROW_TOTAL, vi));
-        const { v: out, pct } = showAsCell(raw, ROW_TOTAL, vi, node);
+        // Apply Show-as to the row-Total column too (for a NO-columns pivot this IS the value
+        // column). Running total accumulates its own down-the-rows sum here (keyed by ROW_TOTAL).
+        const { v: out, pct } = showAsCell(raw, ROW_TOTAL, vi, node, parent, accumulate);
         set(row, totalStart + vi, { v: out, s: numStyle(pct ? PCT_PATTERN : patternFor(v), true) });
       });
     }
   };
 
-  const walk = (nodes: PivotNode[]) => {
+  const walk = (nodes: PivotNode[], parent: PivotNode | null = null) => {
     for (const node of nodes) {
       const hasChildren = node.children.length > 0;
       const isCollapsed = collapsed.has(node.path);
+      const isLeaf = !hasChildren || isCollapsed;
       const chevron = hasChildren ? (isCollapsed ? "▸ " : "▾ ") : "";
-      // Group header / leaf row.
+      // Group header / leaf row. Only LEAF rows accumulate a running total.
       set(r, 0, { v: `${chevron}${showKey(node.key)}`, s: indentStyle(node.level, hasChildren ? { bl: 1 } : undefined) });
-      emitValueCells(r, node, false);
+      emitValueCells(r, node, false, parent, isLeaf);
       r++;
       if (hasChildren && !isCollapsed) {
-        walk(node.children);
+        walk(node.children, node);
         // Per-level "Show totals" (dimSettings), falling back to the global default.
         const showThisTotal = spec.dimSettings?.[spec.rows[node.level]]?.showTotals ?? showRowSubtotals;
         if (showThisTotal) {
           set(r, 0, { v: `${showKey(node.key)} Total`, s: indentStyle(node.level, TOTAL_LABEL_STYLE) });
-          emitValueCells(r, node, true);
+          emitValueCells(r, node, true, parent, false);
           r++;
         }
       }
@@ -851,7 +871,7 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
   // Grand-total row.
   if (showGrand.row) {
     set(r, 0, { v: "Grand Total", s: TOTAL_LABEL_STYLE });
-    emitValueCells(r, null, true);
+    emitValueCells(r, null, true, null, false);
     r++;
   }
 

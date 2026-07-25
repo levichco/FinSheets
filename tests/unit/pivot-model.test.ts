@@ -314,6 +314,53 @@ describe("Wave 3 — value cells inherit the source column number format (curren
   });
 });
 
+describe("Wave 4 — Show as: running total + % of parent row", () => {
+  const src: PivotSource = {
+    fields: ["m", "amt"],
+    rows: [
+      { m: "Jan", amt: 10 },
+      { m: "Feb", amt: 20 },
+      { m: "Mar", amt: 30 },
+    ],
+  };
+  const bodyCol1 = (spec: PivotSpec) => {
+    const region = renderPivotModel(computePivotModel(src, spec));
+    const out: number[] = [];
+    for (let r = 0; r < region.rowCount; r++) {
+      const v = (region.cells[r]?.[1] as { v?: unknown } | undefined)?.v;
+      const label = (region.cells[r]?.[0] as { v?: unknown } | undefined)?.v;
+      if (typeof v === "number" && label !== "Grand Total") out.push(v);
+    }
+    return out;
+  };
+
+  it("running total accumulates down the rows", () => {
+    // Jan=10, Feb=+20→30, Mar=+30→60 (rows sort lexically Feb,Jan,Mar here, but each is a leaf).
+    const spec: PivotSpec = { rows: ["m"], columns: [], values: [{ field: "amt", aggregate: "sum", showAs: "runningTotal" }] };
+    const region = computePivotModel(src, spec);
+    const rt = renderPivotModel(region);
+    // Collect running-total body cells in row order.
+    const vals: number[] = [];
+    for (let r = 0; r < rt.rowCount; r++) {
+      const label = (rt.cells[r]?.[0] as { v?: unknown } | undefined)?.v;
+      const v = (rt.cells[r]?.[1] as { v?: unknown } | undefined)?.v;
+      if (typeof v === "number" && label !== "Grand Total") vals.push(v);
+    }
+    // Whatever the row order, the running total must be monotonically non-decreasing and end at 60.
+    for (let i = 1; i < vals.length; i++) expect(vals[i]).toBeGreaterThanOrEqual(vals[i - 1]);
+    expect(vals[vals.length - 1]).toBe(60);
+  });
+
+  it("% of parent row (single level) = value / grand total", () => {
+    const spec: PivotSpec = { rows: ["m"], columns: [], values: [{ field: "amt", aggregate: "sum", showAs: "pctOfParentRow" }] };
+    const vals = bodyCol1(spec)
+      .map((v) => Math.round(v * 1000) / 1000)
+      .sort((a, b) => a - b);
+    // 10/60≈0.167, 20/60≈0.333, 30/60=0.5.
+    expect(vals).toEqual([0.167, 0.333, 0.5]);
+  });
+});
+
 describe("Wave 3 — filter by condition (applied before aggregation, changes totals)", () => {
   const src: PivotSource = {
     fields: ["region", "type", "amount"],
