@@ -256,7 +256,17 @@ export function placeField(spec: PivotSpec, field: string, area: PivotArea, inde
 
 /** Reset a spec to an empty pivot (the "Clear all" action). */
 export function clearAll(spec: PivotSpec): PivotSpec {
-  return { ...spec, rows: [], columns: [], values: [], filters: [], dimSettings: {}, collapsed: [] };
+  return { ...spec, rows: [], columns: [], values: [], filters: [], dimSettings: {}, collapsed: [], grandTotalLabel: undefined, blankRowBetweenGroups: false, centerGroupLabels: false };
+}
+
+/** Set the custom grand-total label (empty → default "Grand Total"). */
+export function setGrandTotalLabel(spec: PivotSpec, label: string): PivotSpec {
+  return { ...spec, grandTotalLabel: label.trim() ? label : undefined };
+}
+
+/** Toggle a boolean layout option (blank-row separator / center group labels). */
+export function setPivotLayoutOption(spec: PivotSpec, patch: Partial<Pick<PivotSpec, "blankRowBetweenGroups" | "centerGroupLabels">>): PivotSpec {
+  return { ...spec, ...patch };
 }
 
 /** Collapse every row-group (Google Sheets "Collapse all"). `paths` = all collapsible node paths. */
@@ -950,6 +960,32 @@ export function PivotPanel({ fields, spec, onChange, onClose, distinctValues, de
               </div>
             );
           })}
+
+          {/* Table options — grand-total label + layout toggles (Google-Sheets "Totals"/layout). */}
+          <div data-testid="area-table-options">
+            <div style={sectionHead}>
+              <span style={areaTitle}>Table options</span>
+            </div>
+            <div style={{ padding: "0 2px 8px" }}>
+              <label style={ctrlLabel}>Grand total label</label>
+              <input
+                type="text"
+                value={spec.grandTotalLabel ?? ""}
+                placeholder="Grand Total"
+                aria-label="Grand total label"
+                onChange={(e) => onChange(setGrandTotalLabel(spec, e.target.value))}
+                style={{ width: "100%", height: 32, borderRadius: 8, border: `1px solid ${T.borderPrimary}`, padding: "0 10px", fontSize: 12.5, boxSizing: "border-box", color: T.textPrimary, background: T.bg }}
+              />
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: T.textSecondary, marginTop: 8 }}>
+                <input type="checkbox" style={{ accentColor: "var(--color-fiab-yellow-600)" }} checked={spec.blankRowBetweenGroups ?? false} onChange={(e) => onChange(setPivotLayoutOption(spec, { blankRowBetweenGroups: e.target.checked }))} />
+                Blank row between groups
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: T.textSecondary, marginTop: 6 }}>
+                <input type="checkbox" style={{ accentColor: "var(--color-fiab-yellow-600)" }} checked={spec.centerGroupLabels ?? false} onChange={(e) => onChange(setPivotLayoutOption(spec, { centerGroupLabels: e.target.checked }))} />
+                Center group labels
+              </label>
+            </div>
+          </div>
         </div>
 
         {/* Right column: the persistent, draggable Fields rail (the Google-Sheets source list).

@@ -56,24 +56,27 @@ function collapsibleRowPaths(model: ReturnType<typeof computePivotModel>): Map<n
   // renderPivotModel again (it did once when Wave 4c added tiered multi-level headers + the
   // multi-value measure row and the old `(colDepth>0?1:0)+1` under-counted both).
   const headerRows = pivotHeaderRowCount(spec);
+  const blankBetween = spec.blankRowBetweenGroups ?? false;
   const out = new Map<number, string>();
   let r = headerRows;
-  const walk = (nodes: typeof model.rowTree) => {
-    for (const node of nodes) {
+  const walk = (nodes: typeof model.rowTree, isTop: boolean) => {
+    nodes.forEach((node, ni) => {
       const hasChildren = node.children.length > 0;
       const isCollapsed = collapsed.has(node.path);
       if (hasChildren) out.set(r, node.path);
       r++;
       if (hasChildren && !isCollapsed) {
-        walk(node.children);
+        walk(node.children, false);
         // Per-dimension "Show totals" (dimSettings) falls back to the global default — same rule
         // renderPivotModel uses to decide whether it emitted a subtotal row for this level.
         const showThisTotal = spec.dimSettings?.[spec.rows[node.level]]?.showTotals ?? showRowSubtotals;
         if (showThisTotal) r++; // subtotal row
       }
-    }
+      // Blank spacer row between top-level groups — mirrors renderPivotModel's walk exactly.
+      if (blankBetween && isTop && ni < nodes.length - 1) r++;
+    });
   };
-  if (spec.rows.length > 0) walk(model.rowTree);
+  if (spec.rows.length > 0) walk(model.rowTree, true);
   return out;
 }
 

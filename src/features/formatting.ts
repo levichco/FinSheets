@@ -7,6 +7,8 @@ import type { CellStyle, ColumnDef } from "../core/types";
 
 /** Univer HorizontalAlign.RIGHT (avoids importing the enum). */
 export const ALIGN_RIGHT = 3;
+/** Univer HorizontalAlign.CENTER. */
+export const ALIGN_CENTER = 2;
 
 /** Default ISO date display. */
 export const DATE_PATTERN = "yyyy-mm-dd";

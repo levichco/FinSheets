@@ -10,7 +10,7 @@
  * compact-vs-tabular layout, per-value number formats, and indent (via the same `pd.l`
  * left-padding used for imported pivots).
  */
-import { ALIGN_RIGHT, NUMBER_PATTERN } from "./formatting";
+import { ALIGN_CENTER, ALIGN_RIGHT, NUMBER_PATTERN } from "./formatting";
 import { evalFormula, formulaRefs } from "./pivot-formula";
 import type { Cell, CellStyle, PivotAggregate, PivotFilterCondition, PivotGroupRule, PivotModel, PivotNode, PivotSource, PivotSpec, PivotValueField } from "../core/types";
 
@@ -870,6 +870,11 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
   }
   const collapsed = new Set(spec.collapsed ?? []);
   const showRowSubtotals = spec.showRowSubtotals ?? spec.rows.length > 1;
+  // Optional layout: custom grand-total label, blank spacer rows between top-level groups, and
+  // center-aligned group labels. All default to the current look (off / "Grand Total").
+  const gtLabel = spec.grandTotalLabel?.trim() || "Grand Total";
+  const blankBetween = spec.blankRowBetweenGroups ?? false;
+  const centerLabels = spec.centerGroupLabels ?? false;
   // Grand totals need at least one value to total. With rows/columns but no values the
   // pivot lists the distinct labels only (no numeric grand total), like Google Sheets.
   const showGrand = values.length === 0 ? { row: false, column: false } : (spec.showGrandTotals ?? { row: true, column: true });
@@ -939,7 +944,7 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
       // "Grand Total" spans the value columns on the FIRST level row only.
       if (showGrand.column) {
         for (let vi = 0; vi < nValues; vi++) set(hrLvl, totalStart + vi, { v: "", s: HEADER_STYLE });
-        if (lvl === 0) set(hrLvl, totalStart, { v: "Grand Total", s: HEADER_STYLE });
+        if (lvl === 0) set(hrLvl, totalStart, { v: gtLabel, s: HEADER_STYLE });
       }
       headerRows++;
     }
@@ -1122,13 +1127,15 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
   };
 
   const walk = (nodes: PivotNode[], parent: PivotNode | null = null) => {
-    for (const node of nodes) {
+    nodes.forEach((node, ni) => {
       const hasChildren = node.children.length > 0;
       const isCollapsed = collapsed.has(node.path);
       const isLeaf = !hasChildren || isCollapsed;
       const chevron = hasChildren ? (isCollapsed ? "▸ " : "▾ ") : "";
-      // Group header / leaf row. Only LEAF rows accumulate a running total.
-      set(r, 0, { v: `${chevron}${showKey(node.key)}`, s: indentStyle(node.level, hasChildren ? { bl: 1 } : undefined) });
+      // Group header / leaf row. Only LEAF rows accumulate a running total. Group headers may be
+      // center-aligned (opt-in). indentStyle already spreads `extra`, so ht rides along.
+      const labelExtra: CellStyle | undefined = hasChildren ? { bl: 1, ...(centerLabels ? { ht: ALIGN_CENTER } : {}) } : centerLabels ? { ht: ALIGN_CENTER } : undefined;
+      set(r, 0, { v: `${chevron}${showKey(node.key)}`, s: indentStyle(node.level, labelExtra) });
       emitValueCells(r, node, false, parent, isLeaf);
       r++;
       if (hasChildren && !isCollapsed) {
@@ -1141,7 +1148,10 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
           r++;
         }
       }
-    }
+      // Blank spacer row between TOP-LEVEL groups (not after the last one). Mirrored in the
+      // collapse hit-test (LevichSheet collapsibleRowPaths) so click→path mapping stays aligned.
+      if (blankBetween && parent === null && ni < nodes.length - 1) r++;
+    });
   };
   // With no Row field, the row tree is a single synthetic empty-key node — Google Sheets renders
   // no body in that case, just the column headers and a Grand Total row. So only walk when there
@@ -1150,7 +1160,7 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
 
   // Grand-total row.
   if (showGrand.row) {
-    set(r, 0, { v: "Grand Total", s: TOTAL_LABEL_STYLE });
+    set(r, 0, { v: gtLabel, s: TOTAL_LABEL_STYLE });
     emitValueCells(r, null, true, null, false);
     r++;
   }

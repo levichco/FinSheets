@@ -516,6 +516,54 @@ describe("Wave 1 — collapse geometry helpers (header alignment + collapsible p
   });
 });
 
+describe("Wave 4 — layout options (grand-total label / blank rows / center labels)", () => {
+  const src: PivotSource = {
+    fields: ["region", "product", "amt"],
+    rows: [
+      { region: "East", product: "A", amt: 10 },
+      { region: "East", product: "B", amt: 20 },
+      { region: "West", product: "A", amt: 30 },
+    ],
+  };
+  const base: PivotSpec = { rows: ["region", "product"], columns: [], values: [{ field: "amt", aggregate: "sum" }] };
+
+  it("grandTotalLabel relabels the grand-total row", () => {
+    const region = renderPivotModel(computePivotModel(src, { ...base, grandTotalLabel: "Overall" }));
+    // Last row is the grand total.
+    const last = region.cells[region.rowCount - 1]?.[0] as { v?: unknown } | undefined;
+    expect(last?.v).toBe("Overall");
+  });
+
+  it("blankRowBetweenGroups inserts a spacer between top-level groups (and grows rowCount)", () => {
+    const plain = renderPivotModel(computePivotModel(src, base));
+    const spaced = renderPivotModel(computePivotModel(src, { ...base, blankRowBetweenGroups: true }));
+    // 2 top-level groups → exactly 1 spacer row added.
+    expect(spaced.rowCount).toBe(plain.rowCount + 1);
+    // The spacer row (between East's block and West) has an empty label cell.
+    let blankRows = 0;
+    for (let r = 0; r < spaced.rowCount; r++) {
+      const c0 = spaced.cells[r]?.[0];
+      if (c0 === undefined || c0.v === undefined) blankRows++;
+    }
+    expect(blankRows).toBeGreaterThanOrEqual(1);
+  });
+
+  it("centerGroupLabels center-aligns group header labels (ht=2)", () => {
+    const region = renderPivotModel(computePivotModel(src, { ...base, centerGroupLabels: true }));
+    // Find a group-header row (chevron on its label) and assert center alignment.
+    let found = false;
+    for (let r = 0; r < region.rowCount; r++) {
+      const cell = region.cells[r]?.[0] as { v?: unknown; s?: { ht?: number } } | undefined;
+      if (typeof cell?.v === "string" && (cell.v.startsWith("▾ ") || cell.v.startsWith("▸ "))) {
+        expect(cell.s?.ht).toBe(2); // ALIGN_CENTER
+        found = true;
+        break;
+      }
+    }
+    expect(found).toBe(true);
+  });
+});
+
 describe("Wave 5 — Show as completion (rank / % parent col / % running total / index)", () => {
   const src: PivotSource = {
     fields: ["m", "amt"],
