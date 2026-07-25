@@ -170,8 +170,13 @@ export function toDate(raw: unknown): number {
   return NaN;
 }
 
-/** Evaluate a Google-Sheets "Filter by condition" predicate against a raw cell value. */
-export function matchesCondition(raw: unknown, cond: PivotFilterCondition): boolean {
+const DAY_MS = 86400000;
+/** UTC day index (days since epoch) of a timestamp — for day-granular date comparisons. */
+const utcDay = (ts: number): number => Math.floor(ts / DAY_MS);
+
+/** Evaluate a Google-Sheets "Filter by condition" predicate against a raw cell value. `now` (ms)
+ *  is injectable so relative-date windows ("last 7 days") are deterministic under test. */
+export function matchesCondition(raw: unknown, cond: PivotFilterCondition, now: number = Date.now()): boolean {
   const empty = raw == null || String(raw).trim() === "";
   switch (cond.type) {
     case "isEmpty":
@@ -188,6 +193,49 @@ export function matchesCondition(raw: unknown, cond: PivotFilterCondition): bool
       return String(raw ?? "").toLowerCase().endsWith(cond.value.toLowerCase());
     case "textEq":
       return String(raw ?? "").toLowerCase() === cond.value.toLowerCase();
+    case "dateBefore":
+    case "dateAfter":
+    case "dateOn":
+    case "dateBetween": {
+      // Compare the cell's parsed date (ISO / US / Excel serial) against ISO bound(s), day-granular.
+      const ts = toDateTs(raw);
+      if (!Number.isFinite(ts)) return false;
+      const day = utcDay(ts);
+      if (cond.type === "dateBetween") {
+        const lo = toDateTs(cond.value);
+        const hi = toDateTs(cond.value2);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return false;
+        return day >= utcDay(lo) && day <= utcDay(hi);
+      }
+      const b = toDateTs(cond.value);
+      if (!Number.isFinite(b)) return false;
+      const bd = utcDay(b);
+      return cond.type === "dateBefore" ? day < bd : cond.type === "dateAfter" ? day > bd : day === bd;
+    }
+    case "dateRelative": {
+      const ts = toDateTs(raw);
+      if (!Number.isFinite(ts)) return false;
+      const day = utcDay(ts);
+      const nowDay = utcDay(now);
+      switch (cond.value) {
+        case "today":
+          return day === nowDay;
+        case "yesterday":
+          return day === nowDay - 1;
+        case "last7":
+          return day <= nowDay && day > nowDay - 7;
+        case "last30":
+          return day <= nowDay && day > nowDay - 30;
+        case "thisMonth": {
+          const d = new Date(ts);
+          const n = new Date(now);
+          return d.getUTCFullYear() === n.getUTCFullYear() && d.getUTCMonth() === n.getUTCMonth();
+        }
+        case "thisYear":
+          return new Date(ts).getUTCFullYear() === new Date(now).getUTCFullYear();
+      }
+      return false;
+    }
     default: {
       // Numeric conditions — compare via the same parser the SUM engine uses.
       const n = toNumber(raw);
@@ -208,6 +256,7 @@ export function matchesCondition(raw: unknown, cond: PivotFilterCondition): bool
         case "between":
           return n >= cond.value && n <= cond.value2;
       }
+      return false;
     }
   }
 }
@@ -451,11 +500,18 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
   // 1. Filter rows — "by values" (include list) AND/OR "by condition" predicate. Both run BEFORE
   // aggregation, so a filter changes totals (Google-Sheets semantics), not just visibility.
   const filters = spec.filters ?? [];
+  const filterNow = Date.now(); // single "now" for all relative-date conditions in this compute
   const rows = source.rows.filter((r) =>
     filters.every((f) => {
       const raw = r[f.field];
       if (f.include && !f.include.includes(String(raw ?? ""))) return false;
-      if (f.condition && !matchesCondition(raw, f.condition)) return false;
+      // Multiple conditions combine by AND (default) or OR. `conditions` supersedes the legacy
+      // single `condition`; fall back to it so old specs keep working.
+      const conds = f.conditions ?? (f.condition ? [f.condition] : []);
+      if (conds.length) {
+        const ok = f.combiner === "or" ? conds.some((c) => matchesCondition(raw, c, filterNow)) : conds.every((c) => matchesCondition(raw, c, filterNow));
+        if (!ok) return false;
+      }
       return true;
     }),
   );

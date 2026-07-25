@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ROW_TOTAL, collectCollapsiblePaths, computePivotModel, pivotHeaderRowCount, renderPivotModel, toNumber } from "../../src/features/pivot-model";
+import { ROW_TOTAL, collectCollapsiblePaths, computePivotModel, matchesCondition, pivotHeaderRowCount, renderPivotModel, toNumber } from "../../src/features/pivot-model";
 import type { PivotAggregate, PivotSource, PivotSpec } from "../../src/core/types";
 
 describe("row Total with a BLANK column-field value (regression: must include the blank column)", () => {
@@ -795,6 +795,46 @@ describe("Wave 3 — filter by condition (applied before aggregation, changes to
     const spec: PivotSpec = { rows: [], columns: [], values: [{ field: "amount", aggregate: "sum" }], filters: [{ field: "region", include: ["West"], condition: undefined }, { field: "amount", condition: { type: "gt", value: 50 } }] };
     // region=West (100, 30) AND amount>50 → only 100.
     expect(grand(spec)).toBe(100);
+  });
+});
+
+describe("Wave 3 — multi-condition (AND/OR) + date filter conditions", () => {
+  const dsrc: PivotSource = {
+    fields: ["d", "amt"],
+    rows: [
+      { d: "2020-01-15", amt: 10 },
+      { d: "2020-06-20", amt: 20 },
+      { d: "2021-03-10", amt: 30 },
+      { d: "2021-11-05", amt: 40 },
+    ],
+  };
+  const grand = (spec: PivotSpec) => computePivotModel(dsrc, spec).grand.get(`${ROW_TOTAL}␟0`);
+
+  it("date before / after / between filter by parsed date", () => {
+    expect(grand({ rows: [], columns: [], values: [{ field: "amt", aggregate: "sum" }], filters: [{ field: "d", condition: { type: "dateBefore", value: "2021-01-01" } }] })).toBe(30); // 2020 rows: 10+20
+    expect(grand({ rows: [], columns: [], values: [{ field: "amt", aggregate: "sum" }], filters: [{ field: "d", condition: { type: "dateAfter", value: "2021-01-01" } }] })).toBe(70); // 2021 rows: 30+40
+    expect(grand({ rows: [], columns: [], values: [{ field: "amt", aggregate: "sum" }], filters: [{ field: "d", condition: { type: "dateBetween", value: "2020-06-01", value2: "2021-06-01" } }] })).toBe(50); // 20+30
+  });
+
+  it("multiple conditions combine by AND (default) and OR", () => {
+    // AND: amt > 15 AND amt < 35 → 20 + 30 = 50.
+    expect(grand({ rows: [], columns: [], values: [{ field: "amt", aggregate: "sum" }], filters: [{ field: "amt", conditions: [{ type: "gt", value: 15 }, { type: "lt", value: 35 }] }] })).toBe(50);
+    // OR: amt < 15 OR amt > 35 → 10 + 40 = 50.
+    expect(grand({ rows: [], columns: [], values: [{ field: "amt", aggregate: "sum" }], filters: [{ field: "amt", combiner: "or", conditions: [{ type: "lt", value: 15 }, { type: "gt", value: 35 }] }] })).toBe(50);
+  });
+
+  it("legacy single `condition` still works alongside the new `conditions` array", () => {
+    expect(grand({ rows: [], columns: [], values: [{ field: "amt", aggregate: "sum" }], filters: [{ field: "amt", condition: { type: "gte", value: 30 } }] })).toBe(70); // 30+40
+  });
+
+  it("relative date window is deterministic with an injected now (matchesCondition)", () => {
+    const now = Date.UTC(2021, 2, 15); // 2021-03-15
+    expect(matchesCondition("2021-03-15", { type: "dateRelative", value: "today" }, now)).toBe(true);
+    expect(matchesCondition("2021-03-14", { type: "dateRelative", value: "yesterday" }, now)).toBe(true);
+    expect(matchesCondition("2021-03-10", { type: "dateRelative", value: "last7" }, now)).toBe(true);
+    expect(matchesCondition("2021-03-01", { type: "dateRelative", value: "last7" }, now)).toBe(false);
+    expect(matchesCondition("2021-03-01", { type: "dateRelative", value: "thisMonth" }, now)).toBe(true);
+    expect(matchesCondition("2020-03-01", { type: "dateRelative", value: "thisYear" }, now)).toBe(false);
   });
 });
 
