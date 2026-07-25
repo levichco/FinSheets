@@ -81,7 +81,12 @@ interface Acc {
   fn: number; // finite-value count (for "countNumbers"/COUNT / "average").
   min: number; // running min over finite values (Infinity if none seen).
   max: number; // running max over finite values (-Infinity if none seen).
-  sq: number; // Σx² over finite values (for STDEV/STDEVP/VAR/VARP — mergeable).
+  // Welford/Chan running moments over finite values (for STDEV/STDEVP/VAR/VARP). Stored as
+  // {mean, M2} rather than Σx² because the naive Σx² − (Σx)²/n form suffers catastrophic
+  // cancellation on large-magnitude data (e.g. currency ~1e8 with small variance → negative
+  // variance / wrong stdev). Welford is exact-to-rounding and merges in O(1) via Chan's algorithm.
+  mean: number; // running mean of finite values.
+  m2: number; // running Σ(x − mean)² (the "M2" sum of squared deviations).
   prod: number; // Πx over finite values (for PRODUCT — mergeable; identity 1).
   vals?: number[]; // finite values, tracked ONLY when a value field uses MEDIAN.
   uniq?: Set<string>; // distinct non-empty raw values, ONLY when a field uses COUNTUNIQUE.
@@ -92,7 +97,8 @@ const newAcc = (needVals = false, needUniq = false): Acc => ({
   fn: 0,
   min: Infinity,
   max: -Infinity,
-  sq: 0,
+  mean: 0,
+  m2: 0,
   prod: 1,
   vals: needVals ? [] : undefined,
   uniq: needUniq ? new Set<string>() : undefined,
@@ -267,7 +273,10 @@ function pushAcc(a: Acc, raw: unknown): void {
   if (Number.isFinite(x)) {
     a.sum += x;
     a.fn += 1;
-    a.sq += x * x;
+    // Welford online moment update (stable variance).
+    const delta = x - a.mean;
+    a.mean += delta / a.fn;
+    a.m2 += delta * (x - a.mean);
     a.prod *= x;
     if (x < a.min) a.min = x;
     if (x > a.max) a.max = x;
@@ -278,10 +287,24 @@ function pushAcc(a: Acc, raw: unknown): void {
 /** Merge `src` INTO `dst` in O(1) (O(k) when tracking median/uniq) — associative +
  *  commutative, so roll-up order doesn't matter and a parent = merge of its children. */
 function mergeAcc(dst: Acc, src: Acc): void {
+  // Chan's parallel merge of the Welford moments — MUST run before dst.fn is updated, since it
+  // uses the pre-merge counts (nA = dst.fn, nB = src.fn). Order-independent and exact-to-rounding.
+  if (src.fn > 0) {
+    if (dst.fn === 0) {
+      dst.mean = src.mean;
+      dst.m2 = src.m2;
+    } else {
+      const nA = dst.fn;
+      const nB = src.fn;
+      const nAB = nA + nB;
+      const delta = src.mean - dst.mean;
+      dst.mean += (delta * nB) / nAB;
+      dst.m2 += src.m2 + (delta * delta * nA * nB) / nAB;
+    }
+  }
   dst.sum += src.sum;
   dst.n += src.n;
   dst.fn += src.fn;
-  dst.sq += src.sq;
   dst.prod *= src.prod;
   if (src.min < dst.min) dst.min = src.min;
   if (src.max > dst.max) dst.max = src.max;
@@ -315,13 +338,13 @@ function readAcc(a: Acc, agg: PivotAggregate): number {
     case "var":
     case "stdev": {
       if (a.fn < 2) return 0;
-      const v = (a.sq - (a.sum * a.sum) / a.fn) / (a.fn - 1); // sample variance
+      const v = a.m2 / (a.fn - 1); // sample variance (Welford M2)
       return agg === "var" ? v : Math.sqrt(Math.max(0, v));
     }
     case "varp":
     case "stdevp": {
       if (a.fn < 1) return 0;
-      const v = (a.sq - (a.sum * a.sum) / a.fn) / a.fn; // population variance
+      const v = a.m2 / a.fn; // population variance (Welford M2)
       return agg === "varp" ? v : Math.sqrt(Math.max(0, v));
     }
     case "sum":
@@ -803,33 +826,25 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
   // "Show as": re-express a raw cell as a % of its row/column/grand/parent total, or a running
   // total accumulated down the rows. Running total keeps per-(column) state across the walk.
   const PCT_PATTERN = "0.0%";
+  const RANK_PATTERN = "#,##0"; // ranks are integers
+  const INDEX_PATTERN = "0.00"; // index is a unit-less ratio
   const runningTotals = new Map<string, number>();
-  const showAsCell = (raw: number | undefined, colPath: string, vi: number, node: PivotNode | null, parent?: PivotNode | null, accumulate = true): { v: number; pct: boolean } => {
-    const mode = values[vi].showAs ?? "default";
-    if (mode === "default" || raw == null) return { v: raw ?? 0, pct: false };
-    if (mode === "runningTotal") {
-      // Cumulative sum down the (leaf) rows for this column slot; group/subtotal rows peek without
-      // adding (so a subtotal doesn't double-count its children).
-      const k = cellKey(colPath, vi);
-      const cur = runningTotals.get(k) ?? 0;
-      if (!accumulate) return { v: cur, pct: false };
-      const next = cur + raw;
-      runningTotals.set(k, next);
-      return { v: next, pct: false };
-    }
-    const rowTot = (node ? node.values.get(cellKey(ROW_TOTAL, vi)) : model.grand.get(cellKey(ROW_TOTAL, vi))) ?? 0;
-    const colTot = model.grand.get(cellKey(colPath, vi)) ?? 0;
-    const grandTot = model.grand.get(cellKey(ROW_TOTAL, vi)) ?? 0;
-    // "% of parent row" = value as a fraction of the PARENT row-group's grand total (nested rows);
-    // at the top level the parent is the grand total.
-    const parentTot = (parent ? parent.values.get(cellKey(ROW_TOTAL, vi)) : model.grand.get(cellKey(ROW_TOTAL, vi))) ?? 0;
-    const den = mode === "pctOfRow" ? rowTot : mode === "pctOfCol" ? colTot : mode === "pctOfParentRow" ? parentTot : grandTot;
-    return { v: den ? raw / den : 0, pct: true };
+  // Sum a value across every leaf column under a (possibly non-leaf) column PATH, read from a given
+  // value source (a node's per-column values, OR the grand map). These maps only carry LEAF-column +
+  // ROW_TOTAL keys, so a nested parent column ("X") is the Σ of its leaf descendants ("X␟A", …).
+  const sumForColPath = (src: Map<string, number>, colPath: string, vi: number): number => {
+    const direct = src.get(cellKey(colPath, vi));
+    if (direct !== undefined) return direct; // leaf column or ROW_TOTAL — a real key
+    let s = 0;
+    for (const leaf of realCols) if (leaf === colPath || leaf.startsWith(colPath + SEP)) s += src.get(cellKey(leaf, vi)) ?? 0;
+    return s;
   };
+  const grandForColPath = (colPath: string, vi: number): number => sumForColPath(model.grand, colPath, vi);
   // Calculated fields: map a value-field NAME → its index (non-custom only, so a formula can't
   // reference another custom field). `cellValueOf` returns a cell's value — for a custom field it
   // evaluates the formula by substituting the referenced value fields' aggregates at the same
   // intersection; undefined (blank) when no referenced measure is present or the formula errors.
+  // Defined BEFORE the rank precompute so ranks over a calculated field use its EVALUATED value.
   const valueVi = new Map<string, number>();
   values.forEach((v, vi) => {
     if (v.aggregate !== "custom" && !valueVi.has(v.field)) valueVi.set(v.field, vi);
@@ -849,11 +864,90 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
     });
     return anyRef && Number.isFinite(out) ? out : undefined;
   };
+  // "Rank smallest→largest / largest→smallest": rank the LEAF row groups by a value within each
+  // column slot, SCOPED PER PARENT row-group (Excel/Sheets rank the innermost items within each
+  // parent, not globally). Competition ranking — tied values share a rank. Values come through
+  // cellValueOf so a calculated field ranks by its evaluated result. Precomputed once because a
+  // rank is relative to every sibling leaf, not derivable from one cell alone.
+  const rankMap = new Map<string, number>(); // `${colPath}${SEP}${vi}${SEP}${nodePath}` → rank
+  if (values.some((v) => v.showAs === "rankAsc" || v.showAs === "rankDesc")) {
+    const groups = new Map<string, PivotNode[]>(); // parentPath → its leaf nodes
+    const collectLeaves = (nodes: PivotNode[]) => {
+      for (const n of nodes) {
+        if (n.children.length === 0 || collapsed.has(n.path)) {
+          const i = n.path.lastIndexOf(SEP);
+          const pk = i < 0 ? "" : n.path.slice(0, i);
+          let g = groups.get(pk);
+          if (!g) groups.set(pk, (g = []));
+          g.push(n);
+        } else collectLeaves(n.children);
+      }
+    };
+    collectLeaves(model.rowTree);
+    const colSlots = [...realCols, ROW_TOTAL];
+    values.forEach((v, vi) => {
+      const asc = v.showAs === "rankAsc";
+      if (!asc && v.showAs !== "rankDesc") return;
+      for (const col of colSlots) {
+        for (const grp of groups.values()) {
+          const entries = grp
+            .map((n) => ({ path: n.path, val: cellValueOf(n, col, vi) }))
+            .filter((e): e is { path: string; val: number } => e.val !== undefined);
+          for (const e of entries) {
+            const better = entries.filter((o) => (asc ? o.val < e.val : o.val > e.val)).length;
+            rankMap.set(`${col}${SEP}${vi}${SEP}${e.path}`, better + 1);
+          }
+        }
+      }
+    });
+  }
+  const showAsCell = (raw: number | undefined, colPath: string, vi: number, node: PivotNode | null, parent: PivotNode | null | undefined, accumulate: boolean): { v: number | ""; pattern: string } => {
+    const mode = values[vi].showAs ?? "default";
+    const base = patternFor(values[vi]);
+    if (mode === "default" || raw == null) return { v: raw ?? 0, pattern: base };
+    if (mode === "runningTotal" || mode === "pctRunningTotal") {
+      // Cumulative sum down the (leaf) rows for this column slot; group/subtotal rows peek without
+      // adding (so a subtotal doesn't double-count its children). "% running total" divides the
+      // cumulative by the column's grand total, so the last leaf reads 100%.
+      const k = cellKey(colPath, vi);
+      const cur = runningTotals.get(k) ?? 0;
+      const val = accumulate ? cur + raw : cur;
+      if (accumulate) runningTotals.set(k, val);
+      if (mode === "pctRunningTotal") {
+        const colGrand = grandForColPath(colPath, vi);
+        return { v: colGrand ? val / colGrand : 0, pattern: PCT_PATTERN };
+      }
+      return { v: val, pattern: base };
+    }
+    if (mode === "rankAsc" || mode === "rankDesc") {
+      const rk = node ? rankMap.get(`${colPath}${SEP}${vi}${SEP}${node.path}`) : undefined;
+      if (rk !== undefined) return { v: rk, pattern: RANK_PATTERN };
+      // Subtotal / grand-total rows carry no rank — Google Sheets leaves those cells BLANK.
+      return { v: "", pattern: base };
+    }
+    const rowTot = (node ? node.values.get(cellKey(ROW_TOTAL, vi)) : model.grand.get(cellKey(ROW_TOTAL, vi))) ?? 0;
+    const colTot = grandForColPath(colPath, vi);
+    const grandTot = model.grand.get(cellKey(ROW_TOTAL, vi)) ?? 0;
+    if (mode === "index") {
+      // Google-Sheets "Index" = (cell × grand) / (rowTotal × colTotal) — a relative-weight measure.
+      const den = rowTot * colTot;
+      return { v: den ? (raw * grandTot) / den : 0, pattern: INDEX_PATTERN };
+    }
+    // "% of parent row" = value / the PARENT row-group's total IN THE SAME COLUMN (so sibling rows
+    // under a parent sum to 100% within each column). "% of parent column" = value / the PARENT
+    // column-group's total IN THE SAME ROW. At the top level the parent is the grand total for that
+    // same column / row (NOT the all-axes grand total).
+    const parentTot = (parent ? parent.values.get(cellKey(colPath, vi)) : model.grand.get(cellKey(colPath, vi))) ?? 0;
+    const parentColPath = colPath === ROW_TOTAL ? ROW_TOTAL : (() => { const i = colPath.lastIndexOf(SEP); return i < 0 ? ROW_TOTAL : colPath.slice(0, i); })();
+    const parentColTot = sumForColPath(node ? node.values : model.grand, parentColPath, vi);
+    const den = mode === "pctOfRow" ? rowTot : mode === "pctOfCol" ? colTot : mode === "pctOfParentRow" ? parentTot : mode === "pctOfParentCol" ? parentColTot : grandTot;
+    return { v: den ? raw / den : 0, pattern: PCT_PATTERN };
+  };
   // `accumulate` controls whether a "running total" cell adds to its column's running sum (true
   // for leaf data rows) or just peeks the current cumulative (group headers / subtotals / grand).
   const emitValueCells = (row: number, node: PivotNode | null, total: boolean, parent?: PivotNode | null, accumulate = true) => {
     realCols.forEach((col, ci) => {
-      values.forEach((v, vi) => {
+      values.forEach((_v, vi) => {
         const raw = cellValueOf(node, col, vi);
         const slot = dataStart + ci * perCol + vi;
         // Absent intersection (no source rows) → BLANK, like Google Sheets (not 0.00). A genuine
@@ -862,12 +956,13 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
           set(row, slot, { v: "", s: total ? TOTAL_LABEL_STYLE : undefined });
           return;
         }
-        const { v: out, pct } = showAsCell(raw, col, vi, node, parent, accumulate);
-        set(row, slot, { v: out, s: numStyle(pct ? PCT_PATTERN : patternFor(v), total) });
+        const { v: out, pattern } = showAsCell(raw, col, vi, node, parent, accumulate);
+        // A Show-as blank (e.g. rank on a subtotal row) renders as an empty styled cell, not 0.
+        set(row, slot, out === "" ? { v: "", s: total ? TOTAL_LABEL_STYLE : undefined } : { v: out, s: numStyle(pattern, total) });
       });
     });
     if (showGrand.column) {
-      values.forEach((v, vi) => {
+      values.forEach((_v, vi) => {
         const raw = cellValueOf(node, ROW_TOTAL, vi);
         if (raw === undefined) {
           set(row, totalStart + vi, { v: "", s: TOTAL_LABEL_STYLE });
@@ -875,8 +970,8 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
         }
         // Apply Show-as to the row-Total column too (for a NO-columns pivot this IS the value
         // column). Running total accumulates its own down-the-rows sum here (keyed by ROW_TOTAL).
-        const { v: out, pct } = showAsCell(raw, ROW_TOTAL, vi, node, parent, accumulate);
-        set(row, totalStart + vi, { v: out, s: numStyle(pct ? PCT_PATTERN : patternFor(v), true) });
+        const { v: out, pattern } = showAsCell(raw, ROW_TOTAL, vi, node, parent, accumulate);
+        set(row, totalStart + vi, out === "" ? { v: "", s: TOTAL_LABEL_STYLE } : { v: out, s: numStyle(pattern, true) });
       });
     }
   };

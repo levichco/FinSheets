@@ -472,6 +472,245 @@ describe("Wave 4 — Show as: running total + % of parent row", () => {
   });
 });
 
+describe("Wave 5 — Show as completion (rank / % parent col / % running total / index)", () => {
+  const src: PivotSource = {
+    fields: ["m", "amt"],
+    rows: [
+      { m: "Jan", amt: 10 },
+      { m: "Feb", amt: 20 },
+      { m: "Mar", amt: 30 },
+    ],
+  };
+  // label(col 0) → value(col 1), excluding the Grand Total row.
+  const labelVals = (source: PivotSource, spec: PivotSpec): Record<string, number> => {
+    const region = renderPivotModel(computePivotModel(source, spec));
+    const out: Record<string, number> = {};
+    for (let r = 0; r < region.rowCount; r++) {
+      const label = (region.cells[r]?.[0] as { v?: unknown } | undefined)?.v;
+      const v = (region.cells[r]?.[1] as { v?: unknown } | undefined)?.v;
+      if (typeof label === "string" && typeof v === "number" && label !== "Grand Total") out[label] = v;
+    }
+    return out;
+  };
+
+  it("rank smallest→largest ranks leaf rows 1..N by value", () => {
+    expect(labelVals(src, { rows: ["m"], columns: [], values: [{ field: "amt", aggregate: "sum", showAs: "rankAsc" }] })).toEqual({ Jan: 1, Feb: 2, Mar: 3 });
+  });
+
+  it("rank largest→smallest reverses the ranking", () => {
+    expect(labelVals(src, { rows: ["m"], columns: [], values: [{ field: "amt", aggregate: "sum", showAs: "rankDesc" }] })).toEqual({ Jan: 3, Feb: 2, Mar: 1 });
+  });
+
+  it("rank uses competition ranking — tied values share a rank", () => {
+    const tied: PivotSource = { fields: ["m", "amt"], rows: [{ m: "A", amt: 10 }, { m: "B", amt: 10 }, { m: "C", amt: 20 }] };
+    // Both 10s tie at rank 1; the 20 is rank 3 (1 + two values below it).
+    expect(labelVals(tied, { rows: ["m"], columns: [], values: [{ field: "amt", aggregate: "sum", showAs: "rankAsc" }] })).toEqual({ A: 1, B: 1, C: 3 });
+  });
+
+  it("rank cells render as integers (no currency/decimal pattern)", () => {
+    const region = renderPivotModel(computePivotModel(src, { rows: ["m"], columns: [], values: [{ field: "amt", aggregate: "sum", numFmt: "$#,##0.00", showAs: "rankAsc" }] }));
+    // Find a leaf rank cell and confirm the pattern is the integer rank pattern, not the $ value pattern.
+    for (let r = 0; r < region.rowCount; r++) {
+      const label = (region.cells[r]?.[0] as { v?: unknown } | undefined)?.v;
+      if (label === "Jan") {
+        const pat = (region.cells[r]?.[1] as { s?: { n?: { pattern?: string } } } | undefined)?.s?.n?.pattern;
+        expect(pat).toBe("#,##0");
+      }
+    }
+  });
+
+  it("% running total accumulates monotonically to 100% at the last leaf", () => {
+    const region = renderPivotModel(computePivotModel(src, { rows: ["m"], columns: [], values: [{ field: "amt", aggregate: "sum", showAs: "pctRunningTotal" }] }));
+    const vals: number[] = [];
+    for (let r = 0; r < region.rowCount; r++) {
+      const label = (region.cells[r]?.[0] as { v?: unknown } | undefined)?.v;
+      const v = (region.cells[r]?.[1] as { v?: unknown } | undefined)?.v;
+      if (typeof v === "number" && label !== "Grand Total") vals.push(v);
+    }
+    for (let i = 1; i < vals.length; i++) expect(vals[i]).toBeGreaterThanOrEqual(vals[i - 1]);
+    expect(Math.round(vals[vals.length - 1] * 1000) / 1000).toBe(1);
+  });
+
+  it("% of parent column (nested columns) normalizes WITHIN each row (not the all-rows grand)", () => {
+    // Two rows with DIFFERENT X-distributions, so a per-row denominator differs from the grand-total
+    // denominator — this locks the fix (must use the row's own parent-column total, not grand).
+    const csrc: PivotSource = {
+      fields: ["r", "cat", "sub", "amt"],
+      rows: [
+        { r: "R1", cat: "X", sub: "A", amt: 10 },
+        { r: "R1", cat: "X", sub: "B", amt: 30 }, // R1 parent X = 40 → 0.25 / 0.75
+        { r: "R2", cat: "X", sub: "A", amt: 90 },
+        { r: "R2", cat: "X", sub: "B", amt: 10 }, // R2 parent X = 100 → 0.9 / 0.1
+      ],
+    };
+    const region = renderPivotModel(computePivotModel(csrc, { rows: ["r"], columns: ["cat", "sub"], values: [{ field: "amt", aggregate: "sum", showAs: "pctOfParentCol" }] }));
+    const rowOf = (label: string) => {
+      for (let r = 0; r < region.rowCount; r++) if ((region.cells[r]?.[0] as { v?: unknown } | undefined)?.v === label) return r;
+      return -1;
+    };
+    const round = (row: number, c: number) => Math.round(((region.cells[row]?.[c] as { v?: number } | undefined)?.v ?? 0) * 1000) / 1000;
+    // Col leaves sorted: X␟A(col1), X␟B(col2). Per-row X totals differ (40 vs 100).
+    expect(round(rowOf("R1"), 1)).toBe(0.25); // 10/40
+    expect(round(rowOf("R1"), 2)).toBe(0.75); // 30/40
+    expect(round(rowOf("R2"), 1)).toBe(0.9); // 90/100  (grand-total denominator would give 100/140≈0.714 — wrong)
+    expect(round(rowOf("R2"), 2)).toBe(0.1); // 10/100
+  });
+
+  it("% of parent row (with columns) normalizes WITHIN each column (sibling rows sum to 100%)", () => {
+    // Nested rows P>{a,b}; a column axis c∈{C1,C2}. % of parent row must divide by the parent's value
+    // IN THE SAME COLUMN, so a & b sum to 100% down each column independently.
+    const prc: PivotSource = {
+      fields: ["p", "s", "c", "amt"],
+      rows: [
+        { p: "P", s: "a", c: "C1", amt: 30 },
+        { p: "P", s: "a", c: "C2", amt: 10 },
+        { p: "P", s: "b", c: "C1", amt: 10 },
+        { p: "P", s: "b", c: "C2", amt: 30 },
+      ],
+    };
+    const region = renderPivotModel(computePivotModel(prc, { rows: ["p", "s"], columns: ["c"], values: [{ field: "amt", aggregate: "sum", showAs: "pctOfParentRow" }] }));
+    // Locate the s=a and s=b LEAF rows (labels are indented; match on trailing "a"/"b").
+    const rowEndingWith = (ch: string) => {
+      for (let r = 0; r < region.rowCount; r++) {
+        const l = String((region.cells[r]?.[0] as { v?: unknown } | undefined)?.v ?? "");
+        if (l.trim().endsWith(ch) && !l.includes("Total")) return r;
+      }
+      return -1;
+    };
+    const round = (row: number, c: number) => Math.round(((region.cells[row]?.[c] as { v?: number } | undefined)?.v ?? 0) * 1000) / 1000;
+    // Cols sorted C1(col1), C2(col2). Parent P per-column: C1=40, C2=40.
+    expect(round(rowEndingWith("a"), 1)).toBe(0.75); // C1: 30/40
+    expect(round(rowEndingWith("b"), 1)).toBe(0.25); // C1: 10/40
+    expect(round(rowEndingWith("a"), 2)).toBe(0.25); // C2: 10/40
+    expect(round(rowEndingWith("b"), 2)).toBe(0.75); // C2: 30/40
+  });
+
+  it("rank blanks subtotal AND grand-total rows (Google Sheets leaves them empty)", () => {
+    const rsrc: PivotSource = {
+      fields: ["g", "s", "amt"],
+      rows: [
+        { g: "G1", s: "a", amt: 10 },
+        { g: "G1", s: "b", amt: 30 },
+        { g: "G2", s: "a", amt: 20 },
+      ],
+    };
+    const region = renderPivotModel(computePivotModel(rsrc, { rows: ["g", "s"], columns: [], values: [{ field: "amt", aggregate: "sum", showAs: "rankAsc" }] }));
+    for (let r = 0; r < region.rowCount; r++) {
+      const label = String((region.cells[r]?.[0] as { v?: unknown } | undefined)?.v ?? "");
+      const cell = region.cells[r]?.[1] as { v?: unknown } | undefined;
+      if (label.includes("Total")) expect(cell?.v).toBe(""); // subtotal + grand rows → blank rank
+    }
+  });
+
+  it("rank ranks WITHIN each parent group for nested rows", () => {
+    // G1 has a=10,b=30 → within G1: a=1,b=2. G2 has a=5,b=50 → within G2: a=1,b=2. (Global ranking
+    // would give different numbers.) Locks the per-parent-group rank scope.
+    const rsrc: PivotSource = {
+      fields: ["g", "s", "amt"],
+      rows: [
+        { g: "G1", s: "a", amt: 10 },
+        { g: "G1", s: "b", amt: 30 },
+        { g: "G2", s: "a", amt: 5 },
+        { g: "G2", s: "b", amt: 50 },
+      ],
+    };
+    const region = renderPivotModel(computePivotModel(rsrc, { rows: ["g", "s"], columns: [], values: [{ field: "amt", aggregate: "sum", showAs: "rankAsc" }] }));
+    const leaves: Array<{ label: string; v: unknown }> = [];
+    for (let r = 0; r < region.rowCount; r++) {
+      const label = String((region.cells[r]?.[0] as { v?: unknown } | undefined)?.v ?? "");
+      const v = (region.cells[r]?.[1] as { v?: unknown } | undefined)?.v;
+      if (!label.includes("Total") && (label.trim().endsWith("a") || label.trim().endsWith("b"))) leaves.push({ label: label.trim(), v });
+    }
+    // Each parent group ranks 1,2 internally — so exactly two 1s and two 2s across the four leaves.
+    expect(leaves.filter((l) => l.v === 1).length).toBe(2);
+    expect(leaves.filter((l) => l.v === 2).length).toBe(2);
+  });
+
+  it("rank of a CALCULATED (custom-formula) field ranks by its evaluated value, not raw sum", () => {
+    const src2: PivotSource = {
+      fields: ["m", "d", "c"],
+      rows: [
+        { m: "Jan", d: 100, c: 90 }, // net 10
+        { m: "Feb", d: 100, c: 60 }, // net 40
+        { m: "Mar", d: 100, c: 80 }, // net 20
+      ],
+    };
+    const region = renderPivotModel(
+      computePivotModel(src2, {
+        rows: ["m"],
+        columns: [],
+        values: [
+          { field: "d", aggregate: "sum" },
+          { field: "c", aggregate: "sum" },
+          { field: "Net", aggregate: "custom", formula: "d - c", showAs: "rankAsc" },
+        ],
+      }),
+    );
+    // Value slot for the custom field (vi=2) is column dataStart(=totalStart here, no cols)… read via label.
+    // net: Jan=10(rank1), Mar=20(rank2), Feb=40(rank3). Find each row and read the 3rd value column.
+    const netCol = (region.cells[1] ? 3 : 3); // rows-only pivot: cols are [label, d, c, net] → net at index 3
+    const rankByMonth: Record<string, unknown> = {};
+    for (let r = 0; r < region.rowCount; r++) {
+      const label = String((region.cells[r]?.[0] as { v?: unknown } | undefined)?.v ?? "");
+      if (["Jan", "Feb", "Mar"].includes(label)) rankByMonth[label] = (region.cells[r]?.[netCol] as { v?: unknown } | undefined)?.v;
+    }
+    expect(rankByMonth).toEqual({ Jan: 1, Mar: 2, Feb: 3 });
+  });
+
+  it("index = (cell × grand) / (rowTotal × colTotal)", () => {
+    const isrc: PivotSource = {
+      fields: ["r", "c", "amt"],
+      rows: [
+        { r: "R1", c: "C1", amt: 10 },
+        { r: "R1", c: "C2", amt: 30 },
+        { r: "R2", c: "C1", amt: 20 },
+        { r: "R2", c: "C2", amt: 20 },
+      ],
+    };
+    const region = renderPivotModel(computePivotModel(isrc, { rows: ["r"], columns: ["c"], values: [{ field: "amt", aggregate: "sum", showAs: "index" }] }));
+    // grand=80, R1 total=40, C1 total=30 → R1/C1 index = 10*80/(40*30) = 0.667.
+    let r1 = -1;
+    for (let r = 0; r < region.rowCount; r++) if ((region.cells[r]?.[0] as { v?: unknown } | undefined)?.v === "R1") r1 = r;
+    const round = (c: number) => Math.round(((region.cells[r1]?.[c] as { v?: number } | undefined)?.v ?? 0) * 1000) / 1000;
+    expect(round(1)).toBe(0.667); // C1
+  });
+});
+
+describe("Wave 6 — numerically-stable variance (Welford / Chan merge)", () => {
+  const rowTot = (m: ReturnType<typeof computePivotModel>, key: string) => m.rowTree.find((n) => n.key === key)!.values.get(`${ROW_TOTAL}␟0`) as number;
+
+  it("VAR/STDEV are shift-invariant on huge-magnitude data (naive Σx² would lose all precision)", () => {
+    const base = [0, 1, 2, 3, 4]; // sample variance = 10/4 = 2.5
+    const OFF = 1e9;
+    const vsrc: PivotSource = { fields: ["g", "x"], rows: base.map((b) => ({ g: "G", x: OFF + b })) };
+    const v = rowTot(computePivotModel(vsrc, { rows: ["g"], columns: [], values: [{ field: "x", aggregate: "var" }] }), "G");
+    expect(Math.abs(v - 2.5)).toBeLessThan(1e-6);
+    const sd = rowTot(computePivotModel(vsrc, { rows: ["g"], columns: [], values: [{ field: "x", aggregate: "stdev" }] }), "G");
+    expect(Math.abs(sd - Math.sqrt(2.5))).toBeLessThan(1e-6);
+  });
+
+  it("variance merges nested subgroups correctly (Chan parallel merge = single-pass variance)", () => {
+    const all = [10, 12, 14, 20, 22, 24];
+    const vsrc: PivotSource = {
+      fields: ["g", "s", "x"],
+      rows: [
+        { g: "P", s: "a", x: 10 },
+        { g: "P", s: "a", x: 12 },
+        { g: "P", s: "b", x: 14 },
+        { g: "P", s: "b", x: 20 },
+        { g: "P", s: "c", x: 22 },
+        { g: "P", s: "c", x: 24 },
+      ],
+    };
+    // The P subtotal variance (built by merging the a/b/c subgroup accumulators) must equal the
+    // sample variance computed over all six raw values in one pass.
+    const pv = rowTot(computePivotModel(vsrc, { rows: ["g", "s"], columns: [], values: [{ field: "x", aggregate: "var" }] }), "P");
+    const mean = all.reduce((a, b) => a + b, 0) / all.length;
+    const expected = all.reduce((a, b) => a + (b - mean) ** 2, 0) / (all.length - 1);
+    expect(Math.abs(pv - expected)).toBeLessThan(1e-9);
+  });
+});
+
 describe("Wave 3 — filter by condition (applied before aggregation, changes totals)", () => {
   const src: PivotSource = {
     fields: ["region", "type", "amount"],
