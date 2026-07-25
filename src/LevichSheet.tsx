@@ -318,35 +318,39 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
         }
         // Drill-down ("Show details"): double-click a VALUE cell → hand the host the underlying
         // source rows aggregated into that cell. Row-label / header / spacer cells return null.
+        const dbg = (msg: string, data?: unknown) => {
+          const w = window as unknown as { __drill?: string[] };
+          (w.__drill ??= []).push(msg + (data !== undefined ? " " + JSON.stringify(data) : ""));
+        };
         const onDbl = () => {
           const spec = specRef.current;
-          console.log("[drill] onDbl fired; hasOnDrillDown=", !!pivotInteractive.onDrillDown, "hasSpec=", !!spec);
+          dbg("onDbl fired", { hasOnDrillDown: !!pivotInteractive.onDrillDown, hasSpec: !!spec });
           if (!spec || !pivotInteractive.onDrillDown) return;
           try {
             const wb = univerAPI.getActiveWorkbook() as unknown as { getActiveRange?: () => { getRow?: () => number; getColumn?: () => number } | null };
             const range = wb?.getActiveRange?.();
             const row = range?.getRow?.();
             const col = range?.getColumn?.();
-            console.log("[drill] activeRange row=", row, "col=", col, "rangeType=", typeof range, "getRowType=", typeof range?.getRow);
+            dbg("activeRange", { row, col, rangeType: typeof range, getRowType: typeof range?.getRow });
             if (row == null || col == null) return;
             const model = computePivotModel(pivotInteractive.source, spec);
             const ref = drillTargetAt(model, row, col);
-            console.log("[drill] ref=", JSON.stringify(ref));
+            dbg("ref", ref);
             if (!ref) return;
             const rows = matchDrillRows(pivotInteractive.source, spec, ref.rowPath, ref.colPath);
-            console.log("[drill] matched rows=", rows.length, "→ calling onDrillDown");
+            dbg("matched rows → calling onDrillDown", { count: rows.length });
             pivotInteractive.onDrillDown(rows, ref);
           } catch (e) {
-            console.log("[drill] onDbl error:", e instanceof Error ? e.message : String(e));
+            dbg("onDbl error", e instanceof Error ? e.message : String(e));
           }
         };
         // DOM-level trigger FIRST (in its own guard) — Univer routes the double-click into its cell
         // editor before any Facade DblClicked event fires, and `addEvent` with an unknown event name
         // can THROW, so this must be attached independently of the Facade attempt below. Reads the
         // (double-click-updated) active cell on the next tick, then drills.
+        dbg("reached container guard", { hasContainer: !!container });
         if (container) {
-          console.log("[drill] attaching DOM dblclick listener to container");
-          const domDbl = () => { console.log("[drill] DOM dblclick captured"); window.setTimeout(onDbl, 0); };
+          const domDbl = () => { dbg("DOM dblclick captured"); window.setTimeout(onDbl, 0); };
           container.addEventListener("dblclick", domDbl, true);
           disposers.push({ dispose: () => container.removeEventListener("dblclick", domDbl, true) } as Disposer);
         }
