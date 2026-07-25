@@ -292,6 +292,28 @@ describe("toNumber — the shared numeric parser (also drives Values aggregate a
   });
 });
 
+describe("Wave 3 — value cells inherit the source column number format (currency), except counts", () => {
+  const src: PivotSource = { fields: ["r", "amt"], rows: [{ r: "X", amt: 10 }], numFmt: { amt: "$#,##0.00" } };
+  const patternAt = (spec: PivotSpec) => {
+    const region = renderPivotModel(computePivotModel(src, spec));
+    for (let rr = 0; rr < region.rowCount; rr++)
+      for (let c = 1; c < region.columnCount; c++) {
+        const p = (region.cells[rr]?.[c] as { s?: { n?: { pattern?: string } } } | undefined)?.s?.n?.pattern;
+        if (p) return p;
+      }
+    return undefined;
+  };
+  it("a SUM value inherits the source currency format", () => {
+    expect(patternAt({ rows: ["r"], columns: [], values: [{ field: "amt", aggregate: "sum" }] })).toBe("$#,##0.00");
+  });
+  it("a COUNT value stays an integer (ignores the source currency format)", () => {
+    expect(patternAt({ rows: ["r"], columns: [], values: [{ field: "amt", aggregate: "count" }] })).toBe("#,##0");
+  });
+  it("an explicit value numFmt overrides the inherited source format", () => {
+    expect(patternAt({ rows: ["r"], columns: [], values: [{ field: "amt", aggregate: "sum", numFmt: "0.0%" }] })).toBe("0.0%");
+  });
+});
+
 describe("Wave 3 — filter by condition (applied before aggregation, changes totals)", () => {
   const src: PivotSource = {
     fields: ["region", "type", "amount"],

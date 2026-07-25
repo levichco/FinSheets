@@ -357,7 +357,14 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
   // row-count" (e.g. 1000) that never reflected the layout — the source of the "pivot
   // shows data I didn't ask for / won't clear" bug. With no values the pivot shows just
   // the row/column labels (Google-Sheets behavior).
-  const values = spec.values;
+  // Inherit each value field's number format from the SOURCE column (currency/%/decimals) when
+  // the value doesn't set its own — so a SUM of a "$" column renders as currency like Google
+  // Sheets. Count aggregates are excluded (they're always integers, regardless of the source).
+  const isCountAgg = (agg: PivotAggregate) => agg === "count" || agg === "countNumbers" || agg === "countunique";
+  const values: PivotValueField[] = spec.values.map((v) => {
+    const inherited = source.numFmt?.[v.field];
+    return v.numFmt || !inherited || isCountAgg(v.aggregate) ? v : { ...v, numFmt: inherited };
+  });
 
   // 1. Filter rows — "by values" (include list) AND/OR "by condition" predicate. Both run BEFORE
   // aggregation, so a filter changes totals (Google-Sheets semantics), not just visibility.
