@@ -328,6 +328,32 @@ describe("Wave 2 — date grouping + numeric bucketing (Google Sheets 'Group by'
     expect(keysOf(spec)).toEqual(["Q1", "Q4"]); // 2024 Q1 (Jan+Feb+Mar), 2023 Q4 (Dec)
   });
 
+  it("groups NUMERIC Excel-serial dates and Date objects (not just date strings) — PSE P1", () => {
+    // Excel serial 45306 = 2024-01-15; 45689 = 2025-02-01 (approx). Univer/xlsx store dates as serials.
+    const serial = { fields: ["d", "amt"], rows: [{ d: 45306, amt: 4 }, { d: new Date(Date.UTC(2024, 0, 20)), amt: 6 }] } as PivotSource;
+    const spec: PivotSpec = { rows: ["d"], columns: [], values: [{ field: "amt", aggregate: "sum" }], dimSettings: { d: { groupRule: { kind: "date", part: "yearMonth" } } } };
+    const m = computePivotModel(serial, spec);
+    // Both land in 2024-01 → single group, summed. (Serial 45306 → Jan 2024; Date → Jan 2024.)
+    expect(m.rowTree.map((n) => n.key)).toEqual(["2024-01"]);
+    expect(m.rowTree[0].values.get(`${ROW_TOTAL}␟0`)).toBe(10);
+  });
+
+  it("present-but-all-blank COUNTA group shows 0, while a truly ABSENT intersection is blank", () => {
+    const src2: PivotSource = {
+      fields: ["r", "c", "t"],
+      rows: [
+        { r: "X", c: "P", t: "" }, // X×P present, value blank → COUNTA 0
+        { r: "Y", c: "Q", t: "hi" }, // Y×Q present, value present → COUNTA 1
+      ],
+    };
+    const m = computePivotModel(src2, { rows: ["r"], columns: ["c"], values: [{ field: "t", aggregate: "count" }] });
+    const x = m.rowTree.find((n) => n.key === "X")!;
+    const y = m.rowTree.find((n) => n.key === "Y")!;
+    expect(x.values.get("P␟0")).toBe(0); // present but blank → 0
+    expect(x.values.has("Q␟0")).toBe(false); // X×Q absent → not present → renders blank
+    expect(y.values.get("Q␟0")).toBe(1);
+  });
+
   it("groups a numeric field into fixed-size buckets sorted by lower bound", () => {
     const src: PivotSource = { fields: ["amt"], rows: [{ amt: 5 }, { amt: 150 }, { amt: 1050 }, { amt: 95 }] };
     const spec: PivotSpec = { rows: ["amt"], columns: [], values: [{ field: "amt", aggregate: "count" }], dimSettings: { amt: { groupRule: { kind: "number", size: 100 } } } };

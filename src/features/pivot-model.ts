@@ -151,6 +151,15 @@ export const PIVOT_DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday
 
 /** Apply a "Group by" rule to a raw value → the bucket LABEL (Google Sheets grouping).
  *  Dates bucket by calendar part; numbers into fixed intervals. "" when not applicable. */
+/** Resolve a raw cell value to a UTC timestamp for date grouping. Handles the three shapes a
+ *  date can arrive as: a `Date`, a NUMERIC Excel serial (days since 1899-12-30 — how Univer/xlsx
+ *  store dates), or an ISO/US date STRING. NaN when not a recognisable date. */
+export function toDateTs(raw: unknown): number {
+  if (raw instanceof Date) return raw.getTime();
+  if (typeof raw === "number" && Number.isFinite(raw)) return Date.UTC(1899, 11, 30) + raw * 86400000;
+  return toDate(raw);
+}
+
 export function applyGroupRule(raw: unknown, rule: PivotGroupRule): string {
   if (rule.kind === "number") {
     const v = toNumber(raw);
@@ -160,7 +169,7 @@ export function applyGroupRule(raw: unknown, rule: PivotGroupRule): string {
     const lo = start + Math.floor((v - start) / size) * size;
     return `${lo} – ${lo + size}`;
   }
-  const ts = toDate(raw);
+  const ts = toDateTs(raw);
   if (!Number.isFinite(ts)) return "";
   const d = new Date(ts);
   switch (rule.part) {
@@ -176,6 +185,8 @@ export function applyGroupRule(raw: unknown, rule: PivotGroupRule): string {
       return PIVOT_DAYS[d.getUTCDay()];
     case "dayOfMonth":
       return String(d.getUTCDate());
+    default:
+      return "";
   }
 }
 
