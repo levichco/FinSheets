@@ -305,6 +305,16 @@ describe("column ORDER (Ascending/Descending) — #37: the Order control must re
     expect(desc.colLeaves).toEqual(["B", "A"]);
   });
 
+  it("row Order sorts numeric labels by VALUE incl. negatives + thousands separators (not lexically)", () => {
+    const src: PivotSource = {
+      fields: ["k"],
+      rows: [{ k: "-10" }, { k: "-5" }, { k: "1,000" }, { k: "900" }, { k: "2,000" }],
+    };
+    const keys = computePivotModel(src, { rows: ["k"], columns: [], values: [] }).rowTree.map((n) => n.key);
+    // Ascending by numeric value: -10, -5, 900, 1,000, 2,000 (lexical would mis-order all of these).
+    expect(keys).toEqual(["-10", "-5", "900", "1,000", "2,000"]);
+  });
+
   it("sorts a NUMERIC column field by value, not lexically (matches Google Sheets)", () => {
     const src: PivotSource = {
       fields: ["r", "amt"],

@@ -356,7 +356,10 @@ export function computePivotModel(source: PivotSource, spec: PivotSpec): PivotMo
   const labelCompare = (a: string, b: string): number => {
     const na = toNumber(a);
     const nb = toNumber(b);
-    return Number.isFinite(na) && Number.isFinite(nb) ? na - nb : cmp.compare(a, b);
+    // Numeric magnitude when both parse; on a numeric TIE (e.g. "001" vs "1") fall back to the
+    // collator so textually-distinct-but-numerically-equal codes keep a stable, lexical order.
+    if (Number.isFinite(na) && Number.isFinite(nb)) return na !== nb ? na - nb : cmp.compare(a, b);
+    return cmp.compare(a, b);
   };
   const sortKeys = (keys: string[], field: string | undefined) => {
     // Google Sheets sorts pivot row/column groups ascending by default; "desc" flips it.
