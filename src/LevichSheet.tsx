@@ -340,6 +340,14 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
           const d3 = f.addEvent(ev.DblClicked ?? "DblClicked", onDbl);
           if (d3) disposers.push(d3);
         }
+        // DOM-level fallback: on a read-only pivot sheet Univer swallows the double-click into its
+        // cell editor before the Facade DblClicked event reaches us, so also listen at the DOM level
+        // and read the (double-click-updated) active cell on the next tick.
+        if (container) {
+          const domDbl = () => window.setTimeout(onDbl, 0);
+          container.addEventListener("dblclick", domDbl, true);
+          disposers.push({ dispose: () => container.removeEventListener("dblclick", domDbl, true) } as Disposer);
+        }
       } catch {
         /* selection surface differs — collapse falls back to a no-op */
       }
