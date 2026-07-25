@@ -336,17 +336,24 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
             /* drill resolution is best-effort */
           }
         };
-        if (f.addEvent) {
-          const d3 = f.addEvent(ev.DblClicked ?? "DblClicked", onDbl);
-          if (d3) disposers.push(d3);
-        }
-        // DOM-level fallback: on a read-only pivot sheet Univer swallows the double-click into its
-        // cell editor before the Facade DblClicked event reaches us, so also listen at the DOM level
-        // and read the (double-click-updated) active cell on the next tick.
+        // DOM-level trigger FIRST (in its own guard) — Univer routes the double-click into its cell
+        // editor before any Facade DblClicked event fires, and `addEvent` with an unknown event name
+        // can THROW, so this must be attached independently of the Facade attempt below. Reads the
+        // (double-click-updated) active cell on the next tick, then drills.
         if (container) {
           const domDbl = () => window.setTimeout(onDbl, 0);
           container.addEventListener("dblclick", domDbl, true);
           disposers.push({ dispose: () => container.removeEventListener("dblclick", domDbl, true) } as Disposer);
+        }
+        // Also try the Facade event (best-effort; some Univer builds expose it), isolated so a throw
+        // on an unknown event name can't skip the DOM trigger above.
+        try {
+          if (f.addEvent && ev.DblClicked) {
+            const d3 = f.addEvent(ev.DblClicked, onDbl);
+            if (d3) disposers.push(d3);
+          }
+        } catch {
+          /* Facade double-click event not available in this build */
         }
       } catch {
         /* selection surface differs — collapse falls back to a no-op */
