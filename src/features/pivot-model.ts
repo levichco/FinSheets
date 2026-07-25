@@ -828,7 +828,10 @@ export interface RenderedPivot {
  */
 export function pivotHeaderRowCount(spec: PivotSpec): number {
   const colDepth = spec.columns.length;
-  return colDepth === 0 ? 1 : 1 + colDepth + (spec.values.length > 1 ? 1 : 0);
+  // The measure-name header row exists only on the COLUMNS axis with >1 value; the ROWS axis
+  // carries measure names as row labels, so it has no measure header row.
+  const measureRow = spec.values.length > 1 && (spec.valuesAxis ?? "columns") === "columns" ? 1 : 0;
+  return colDepth === 0 ? 1 : 1 + colDepth + measureRow;
 }
 
 /** Every collapsible row-group path (nodes WITH children) in tree order — for "Collapse all". */
@@ -900,10 +903,16 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
   // ONE slot so a Columns field lays out its labels (Google Sheets shows the distinct column
   // values as headers even before a Value is added) instead of collapsing to nothing.
   const nValues = values.length;
-  const perCol = nValues || 1;
+  // "Values" pseudo-field placement (Google Sheets). Default 'columns' fans each column group into
+  // N value sub-columns (the existing, verified layout). 'rows' (opt-in, only with >1 value) moves
+  // the measures onto the ROW axis: each column group is a SINGLE slot and every value-bearing row
+  // fans into N sub-rows (one per measure). Single-value pivots ignore it (nothing to place).
+  const valuesAxis: "rows" | "columns" = nValues > 1 && spec.valuesAxis === "rows" ? "rows" : "columns";
+  const perCol = valuesAxis === "rows" ? 1 : nValues || 1;
   const dataStart = 1;
   const totalStart = dataStart + realCols.length * perCol;
-  const columnCount = totalStart + (showGrand.column ? nValues : 0);
+  const grandCols = showGrand.column ? (valuesAxis === "rows" ? 1 : nValues) : 0;
+  const columnCount = totalStart + grandCols;
 
   // Header rows — Google-Sheets layout. When a Columns field is present the header reads:
   //   row 0: the COLUMN FIELD NAME(s) (e.g. "Amount") — so you see WHAT is spread across the top,
@@ -943,14 +952,15 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
       });
       // "Grand Total" spans the value columns on the FIRST level row only.
       if (showGrand.column) {
-        for (let vi = 0; vi < nValues; vi++) set(hrLvl, totalStart + vi, { v: "", s: HEADER_STYLE });
+        for (let gi = 0; gi < grandCols; gi++) set(hrLvl, totalStart + gi, { v: "", s: HEADER_STYLE });
         if (lvl === 0) set(hrLvl, totalStart, { v: gtLabel, s: HEADER_STYLE });
       }
       headerRows++;
     }
 
-    // Row 2 — value names under each column value (only when there is more than one value).
-    if (nValues > 1) {
+    // Row 2 — value names under each column value (only for the COLUMNS axis with >1 value; the
+    // ROWS axis carries measure names as row labels instead, so this header row is skipped).
+    if (nValues > 1 && valuesAxis === "columns") {
       const measRow = headerRows;
       set(measRow, 0, { v: "", s: HEADER_STYLE });
       realCols.forEach((_col, ci) => values.forEach((v, vi) => set(measRow, dataStart + ci * perCol + vi, { v: valueLabel(v), s: HEADER_STYLE })));
@@ -962,7 +972,10 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
     // as the column header(s) (Google Sheets shows "SUM of Amount" here, not "Grand Total").
     const hr = headerRows;
     set(hr, 0, { v: spec.rows.join(" / ") || "", s: HEADER_STYLE });
-    values.forEach((v, vi) => set(hr, totalStart + vi, { v: valueLabel(v), s: HEADER_STYLE }));
+    // Columns axis: label each value column. Rows axis: the single value column has no per-value
+    // header (measure names are row labels), so just draw an empty header cell.
+    if (valuesAxis === "columns") values.forEach((v, vi) => set(hr, totalStart + vi, { v: valueLabel(v), s: HEADER_STYLE }));
+    else set(hr, totalStart, { v: "", s: HEADER_STYLE });
     headerRows++;
   }
 
@@ -1093,37 +1106,41 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
     const den = mode === "pctOfRow" ? rowTot : mode === "pctOfCol" ? colTot : mode === "pctOfParentRow" ? parentTot : mode === "pctOfParentCol" ? parentColTot : grandTot;
     return { v: den ? raw / den : 0, pattern: PCT_PATTERN };
   };
-  // `accumulate` controls whether a "running total" cell adds to its column's running sum (true
-  // for leaf data rows) or just peeks the current cumulative (group headers / subtotals / grand).
-  const emitValueCells = (row: number, node: PivotNode | null, total: boolean, parent?: PivotNode | null, accumulate = true) => {
+  // Column slot for value `vi` under column-index `ci`. Columns axis fans N sub-columns per group
+  // (slot += vi); rows axis has ONE slot per group (perCol=1, vi ignored — measures are on rows).
+  const valueColSlot = (ci: number, vi: number) => dataStart + ci * perCol + (valuesAxis === "rows" ? 0 : vi);
+  const grandSlot = (vi: number) => totalStart + (valuesAxis === "rows" ? 0 : vi);
+  // Emit ONE value field's cells across the column band (+ grand column) on `row`. Both axes share
+  // this — columns axis calls it for every vi on the SAME row; rows axis calls it once per value on
+  // its own sub-row. `accumulate` controls whether a running-total cell adds or just peeks.
+  const emitOneValueRow = (row: number, node: PivotNode | null, vi: number, total: boolean, parent: PivotNode | null | undefined, accumulate: boolean) => {
     realCols.forEach((col, ci) => {
-      values.forEach((_v, vi) => {
-        const raw = cellValueOf(node, col, vi);
-        const slot = dataStart + ci * perCol + vi;
-        // Absent intersection (no source rows) → BLANK, like Google Sheets (not 0.00). A genuine
-        // aggregate of 0 (e.g. SUM of a $0.00 column that HAS rows) is present, so it still shows.
-        if (raw === undefined) {
-          set(row, slot, { v: "", s: total ? TOTAL_LABEL_STYLE : undefined });
-          return;
-        }
-        const { v: out, pattern } = showAsCell(raw, col, vi, node, parent, accumulate);
-        // A Show-as blank (e.g. rank on a subtotal row) renders as an empty styled cell, not 0.
-        set(row, slot, out === "" ? { v: "", s: total ? TOTAL_LABEL_STYLE : undefined } : { v: out, s: numStyle(pattern, total) });
-      });
+      const raw = cellValueOf(node, col, vi);
+      const slot = valueColSlot(ci, vi);
+      // Absent intersection (no source rows) → BLANK, like Google Sheets (not 0.00). A genuine
+      // aggregate of 0 (e.g. SUM of a $0.00 column that HAS rows) is present, so it still shows.
+      if (raw === undefined) {
+        set(row, slot, { v: "", s: total ? TOTAL_LABEL_STYLE : undefined });
+        return;
+      }
+      const { v: out, pattern } = showAsCell(raw, col, vi, node, parent, accumulate);
+      // A Show-as blank (e.g. rank on a subtotal row) renders as an empty styled cell, not 0.
+      set(row, slot, out === "" ? { v: "", s: total ? TOTAL_LABEL_STYLE : undefined } : { v: out, s: numStyle(pattern, total) });
     });
     if (showGrand.column) {
-      values.forEach((_v, vi) => {
-        const raw = cellValueOf(node, ROW_TOTAL, vi);
-        if (raw === undefined) {
-          set(row, totalStart + vi, { v: "", s: TOTAL_LABEL_STYLE });
-          return;
-        }
-        // Apply Show-as to the row-Total column too (for a NO-columns pivot this IS the value
-        // column). Running total accumulates its own down-the-rows sum here (keyed by ROW_TOTAL).
-        const { v: out, pattern } = showAsCell(raw, ROW_TOTAL, vi, node, parent, accumulate);
-        set(row, totalStart + vi, out === "" ? { v: "", s: TOTAL_LABEL_STYLE } : { v: out, s: numStyle(pattern, true) });
-      });
+      const raw = cellValueOf(node, ROW_TOTAL, vi);
+      if (raw === undefined) {
+        set(row, grandSlot(vi), { v: "", s: TOTAL_LABEL_STYLE });
+        return;
+      }
+      // Apply Show-as to the row-Total column too (for a NO-columns pivot this IS the value column).
+      const { v: out, pattern } = showAsCell(raw, ROW_TOTAL, vi, node, parent, accumulate);
+      set(row, grandSlot(vi), out === "" ? { v: "", s: TOTAL_LABEL_STYLE } : { v: out, s: numStyle(pattern, true) });
     }
+  };
+  // Columns axis: all values live on ONE row (the existing, verified layout).
+  const emitValueCells = (row: number, node: PivotNode | null, total: boolean, parent?: PivotNode | null, accumulate = true) => {
+    values.forEach((_v, vi) => emitOneValueRow(row, node, vi, total, parent, accumulate));
   };
 
   const walk = (nodes: PivotNode[], parent: PivotNode | null = null) => {
@@ -1153,13 +1170,56 @@ export function renderPivotModel(model: PivotModel): RenderedPivot {
       if (blankBetween && parent === null && ni < nodes.length - 1) r++;
     });
   };
+  // Rows-axis body: every value-bearing row (leaf, collapsed group, subtotal) fans into N sub-rows,
+  // one per measure, labelled with the value name and indented one level deeper. Non-leaf group
+  // headers stay a single (collapsible) label row. Kept a SEPARATE walk so the columns-axis path
+  // above is byte-for-byte the verified layout.
+  const walkRowsAxis = (nodes: PivotNode[], parent: PivotNode | null = null) => {
+    nodes.forEach((node, ni) => {
+      const hasChildren = node.children.length > 0;
+      const isCollapsed = collapsed.has(node.path);
+      const isLeaf = !hasChildren || isCollapsed;
+      const chevron = hasChildren ? (isCollapsed ? "▸ " : "▾ ") : "";
+      const labelExtra: CellStyle | undefined = hasChildren ? { bl: 1, ...(centerLabels ? { ht: ALIGN_CENTER } : {}) } : centerLabels ? { ht: ALIGN_CENTER } : undefined;
+      set(r, 0, { v: `${chevron}${showKey(node.key)}`, s: indentStyle(node.level, labelExtra) });
+      r++;
+      if (isLeaf) {
+        values.forEach((v, vi) => {
+          set(r, 0, { v: valueLabel(v), s: indentStyle(node.level + 1, undefined) });
+          emitOneValueRow(r, node, vi, false, parent, true);
+          r++;
+        });
+      } else {
+        walkRowsAxis(node.children, node);
+        const showThisTotal = spec.dimSettings?.[spec.rows[node.level]]?.showTotals ?? showRowSubtotals;
+        if (showThisTotal) {
+          set(r, 0, { v: `${showKey(node.key)} Total`, s: indentStyle(node.level, TOTAL_LABEL_STYLE) });
+          r++;
+          values.forEach((v, vi) => {
+            set(r, 0, { v: valueLabel(v), s: indentStyle(node.level + 1, TOTAL_LABEL_STYLE) });
+            emitOneValueRow(r, node, vi, true, parent, false);
+            r++;
+          });
+        }
+      }
+      if (blankBetween && parent === null && ni < nodes.length - 1) r++;
+    });
+  };
   // With no Row field, the row tree is a single synthetic empty-key node — Google Sheets renders
   // no body in that case, just the column headers and a Grand Total row. So only walk when there
   // is at least one row field.
-  if (spec.rows.length > 0) walk(model.rowTree);
+  if (spec.rows.length > 0) (valuesAxis === "rows" ? walkRowsAxis : walk)(model.rowTree);
 
   // Grand-total row.
-  if (showGrand.row) {
+  if (showGrand.row && valuesAxis === "rows") {
+    set(r, 0, { v: gtLabel, s: TOTAL_LABEL_STYLE });
+    r++;
+    values.forEach((v, vi) => {
+      set(r, 0, { v: valueLabel(v), s: indentStyle(1, TOTAL_LABEL_STYLE) });
+      emitOneValueRow(r, null, vi, true, null, false);
+      r++;
+    });
+  } else if (showGrand.row) {
     set(r, 0, { v: gtLabel, s: TOTAL_LABEL_STYLE });
     emitValueCells(r, null, true, null, false);
     r++;

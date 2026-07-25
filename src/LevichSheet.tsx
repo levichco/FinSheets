@@ -57,6 +57,11 @@ function collapsibleRowPaths(model: ReturnType<typeof computePivotModel>): Map<n
   // multi-value measure row and the old `(colDepth>0?1:0)+1` under-counted both).
   const headerRows = pivotHeaderRowCount(spec);
   const blankBetween = spec.blankRowBetweenGroups ?? false;
+  // Rows-axis fans every value-bearing row (leaf / collapsed group / subtotal) into N value
+  // sub-rows — the hit-test must advance past them or clicks land on the wrong node.
+  const nValues = model.values.length;
+  const rowsAxis = nValues > 1 && (spec.valuesAxis ?? "columns") === "rows";
+  const valueRows = rowsAxis ? nValues : 0;
   const out = new Map<number, string>();
   let r = headerRows;
   const walk = (nodes: typeof model.rowTree, isTop: boolean) => {
@@ -64,13 +69,16 @@ function collapsibleRowPaths(model: ReturnType<typeof computePivotModel>): Map<n
       const hasChildren = node.children.length > 0;
       const isCollapsed = collapsed.has(node.path);
       if (hasChildren) out.set(r, node.path);
-      r++;
-      if (hasChildren && !isCollapsed) {
+      r++; // the group/leaf label row
+      const isLeaf = !hasChildren || isCollapsed;
+      if (isLeaf) {
+        r += valueRows; // leaf / collapsed group fans into N value sub-rows (rows-axis only)
+      } else {
         walk(node.children, false);
         // Per-dimension "Show totals" (dimSettings) falls back to the global default — same rule
         // renderPivotModel uses to decide whether it emitted a subtotal row for this level.
         const showThisTotal = spec.dimSettings?.[spec.rows[node.level]]?.showTotals ?? showRowSubtotals;
-        if (showThisTotal) r++; // subtotal row
+        if (showThisTotal) r += 1 + valueRows; // subtotal label row + its N value sub-rows
       }
       // Blank spacer row between top-level groups — mirrors renderPivotModel's walk exactly.
       if (blankBetween && isTop && ni < nodes.length - 1) r++;

@@ -542,7 +542,7 @@ describe("Wave 4 — layout options (grand-total label / blank rows / center lab
     // The spacer row (between East's block and West) has an empty label cell.
     let blankRows = 0;
     for (let r = 0; r < spaced.rowCount; r++) {
-      const c0 = spaced.cells[r]?.[0];
+      const c0 = spaced.cells[r]?.[0] as { v?: unknown } | undefined;
       if (c0 === undefined || c0.v === undefined) blankRows++;
     }
     expect(blankRows).toBeGreaterThanOrEqual(1);
@@ -561,6 +561,50 @@ describe("Wave 4 — layout options (grand-total label / blank rows / center lab
       }
     }
     expect(found).toBe(true);
+  });
+});
+
+describe("Wave 4b — Values pseudo-field placement (valuesAxis: rows)", () => {
+  const src: PivotSource = {
+    fields: ["region", "amt", "qty"],
+    rows: [
+      { region: "East", amt: 100, qty: 3 },
+      { region: "West", amt: 200, qty: 5 },
+    ],
+  };
+  const twoVals = [{ field: "amt", aggregate: "sum" as const }, { field: "qty", aggregate: "sum" as const }];
+
+  it("rows-axis fans each group into one sub-row per measure (labelled by value name)", () => {
+    const region = renderPivotModel(computePivotModel(src, { rows: ["region"], columns: [], values: twoVals, valuesAxis: "rows" }));
+    // Collect col-0 labels + col-1 values across the body.
+    const rows: Array<{ label: string; v: unknown }> = [];
+    for (let r = 0; r < region.rowCount; r++) {
+      const label = (region.cells[r]?.[0] as { v?: unknown } | undefined)?.v;
+      const v = (region.cells[r]?.[1] as { v?: unknown } | undefined)?.v;
+      if (typeof label === "string") rows.push({ label, v });
+    }
+    // Expect: header, "East" label row, "Sum of amt" 100, "Sum of qty" 3, "West"..., grand.
+    const east = rows.findIndex((x) => x.label === "East");
+    expect(east).toBeGreaterThanOrEqual(0);
+    expect(rows[east + 1].label).toBe("Sum of amt");
+    expect(rows[east + 1].v).toBe(100);
+    expect(rows[east + 2].label).toBe("Sum of qty");
+    expect(rows[east + 2].v).toBe(3);
+  });
+
+  it("rows-axis is a SINGLE value column (no measure header row); columns-axis stays multi-column", () => {
+    const rowsAxis = renderPivotModel(computePivotModel(src, { rows: ["region"], columns: [], values: twoVals, valuesAxis: "rows" }));
+    const colsAxis = renderPivotModel(computePivotModel(src, { rows: ["region"], columns: [], values: twoVals, valuesAxis: "columns" }));
+    // Columns-axis: value column band is 2 wide (amt, qty). Rows-axis: 1 wide.
+    expect(colsAxis.columnCount).toBeGreaterThan(rowsAxis.columnCount);
+  });
+
+  it("valuesAxis is ignored for a single value (layout identical to default)", () => {
+    const one = [{ field: "amt", aggregate: "sum" as const }];
+    const a = renderPivotModel(computePivotModel(src, { rows: ["region"], columns: [], values: one, valuesAxis: "rows" }));
+    const b = renderPivotModel(computePivotModel(src, { rows: ["region"], columns: [], values: one }));
+    expect(a.rowCount).toBe(b.rowCount);
+    expect(a.columnCount).toBe(b.columnCount);
   });
 });
 

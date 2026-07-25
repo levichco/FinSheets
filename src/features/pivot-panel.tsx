@@ -269,6 +269,18 @@ export function setPivotLayoutOption(spec: PivotSpec, patch: Partial<Pick<PivotS
   return { ...spec, ...patch };
 }
 
+/** "Values" pseudo-field placement options. */
+export const VALUES_AXIS_OPTS: Array<{ value: "columns" | "rows"; label: string }> = [
+  { value: "columns", label: "Columns" },
+  { value: "rows", label: "Rows" },
+];
+export function valuesAxisOf(spec: PivotSpec): "columns" | "rows" {
+  return spec.valuesAxis ?? "columns";
+}
+export function setValuesAxis(spec: PivotSpec, axis: "columns" | "rows"): PivotSpec {
+  return { ...spec, valuesAxis: axis };
+}
+
 /** Collapse every row-group (Google Sheets "Collapse all"). `paths` = all collapsible node paths. */
 export function collapseAll(spec: PivotSpec, paths: string[]): PivotSpec {
   return { ...spec, collapsed: [...new Set(paths)] };
@@ -939,6 +951,12 @@ export function PivotPanel({ fields, spec, onChange, onClose, distinctValues, de
                   style={{ display: "flex", flexDirection: "column", gap: 8, minHeight: 8, padding: active ? 6 : 0, borderRadius: 8, background: active ? "var(--color-utility-brand-50)" : "transparent", border: active ? "1px dashed var(--color-border-brand_alt)" : "1px solid transparent" }}
                 >
                   {placed.length === 0 && <span style={emptyHint}>Drag a field here, or use Add.</span>}
+                  {key === "values" && placed.length > 1 && (
+                    <div style={{ marginBottom: 2 }}>
+                      <label style={ctrlLabel}>Show values in</label>
+                      <Select value={valuesAxisOf(spec)} options={VALUES_AXIS_OPTS} ariaLabel="Values placement" onChange={(a) => onChange(setValuesAxis(spec, a))} />
+                    </div>
+                  )}
                   {placed.map((field, i) => (
                     <div
                       key={field}
