@@ -1111,6 +1111,10 @@ export const FULL_FUNCTION_CATEGORIES: CatalogCategory[] = [
     "category": "Lookup",
     "fns": [
       {
+        "name": "IMPORTRANGE",
+        "hint": "Imports a range of cell values from another FinSheets document. IMPORTRANGE(documentId, \"Sheet1!A1:C10\")"
+      },
+      {
         "name": "ADDRESS",
         "hint": "Returns a reference as text to a single cell in a worksheet"
       },

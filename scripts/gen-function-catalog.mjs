@@ -26,9 +26,21 @@ while ((m = re.exec(bundle))) {
   cats[cat] = [...new Set(names)];
 }
 
+// Custom FinSheets functions not present in Univer's stock catalog. IMPORTRANGE is a
+// net-new async cross-file link function registered in src/features/import-range.ts;
+// it must appear in autocomplete, so inject it here (prepended to Lookup).
+const CUSTOM = {
+  Lookup: [{ name: "IMPORTRANGE", hint: 'Imports a range of cell values from another FinSheets document. IMPORTRANGE(documentId, "Sheet1!A1:C10")' }],
+};
+for (const [cat, extra] of Object.entries(CUSTOM)) cats[cat] = [...extra.map((f) => f.name), ...(cats[cat] ?? [])];
+
 const out = ORDER.filter((c) => cats[c] && cats[c].length).map((cat) => ({
   category: cat,
-  fns: cats[cat].map((name) => ({ name, hint: String(fl[name]?.abstract || fl[name]?.description || "").slice(0, 80) })),
+  fns: cats[cat].map((name) => {
+    const custom = CUSTOM[cat]?.find((f) => f.name === name);
+    if (custom) return { name, hint: custom.hint };
+    return { name, hint: String(fl[name]?.abstract || fl[name]?.description || "").slice(0, 80) };
+  }),
 }));
 
 const total = out.reduce((s, c) => s + c.fns.length, 0);

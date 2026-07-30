@@ -31,6 +31,8 @@ export { PivotPanel } from "./features/pivot-panel";
 export type { PivotPanelProps, PivotArea } from "./features/pivot-panel";
 export { computePivotModel, renderPivotModel, valueLabel, matchDrillRows, drillTargetAt } from "./features/pivot-model";
 export { LEVICH_BRAND } from "./theme/brand";
+export { setImportRangeResolver, registerImportRange } from "./features/import-range";
+export type { ImportRangeResolver } from "./features/import-range";
 
 export type {
   SheetData,

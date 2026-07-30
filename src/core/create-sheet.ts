@@ -47,6 +47,7 @@ import { brandContainer } from "../theme/branding-plugin";
 import { levichTheme } from "../theme/levich-theme";
 import { deepMergeLocales, levichLocale } from "../theme/locales";
 import type { WorkbookData } from "./types";
+import { registerImportRange } from "../features/import-range";
 
 export type UniverAPI = ReturnType<typeof createUniver>["univerAPI"];
 
@@ -195,6 +196,15 @@ export function createSheet({
     ],
   });
   univerAPI.createWorkbook(workbookData);
+  // Register the custom cross-file IMPORTRANGE async function. The engine's free tier
+  // has no IMPORTRANGE; this adds it via the Facade's registerAsyncFunction. The actual
+  // cross-document fetch is a host-injected resolver (setImportRangeResolver), read
+  // lazily at call time — so it's safe to register unconditionally here.
+  try {
+    registerImportRange(univerAPI);
+  } catch (err) {
+    console.warn("[finsheets] Failed to register IMPORTRANGE:", err);
+  }
   return { univer, univerAPI };
 }
 
