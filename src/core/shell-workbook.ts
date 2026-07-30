@@ -12,10 +12,24 @@
  * fetches the newly-active sheet's snapshot and rebuilds the shell workbook with
  * that sheet full and the previous one back to a shell.
  *
- * Only one sheet's styles live in the workbook at a time, so per-sheet style ids
- * (`s1`, `s2`, …) can't collide across sheets. Fidelity is identical to rendering
- * a single-sheet snapshot (the proven path) — merges, images, CF, filters and
- * hyperlinks all come through, because the active sheet IS a real snapshot.
+ * Cross-sheet formulas (`=Sheet2!A1`, `=SUM('Details'!A1:A10)`) need the REFERENCED
+ * sheet's data to be resident — an empty shell resolves the reference against nothing
+ * and returns 0/#REF!. So any sheet the host has ALREADY fetched (its per-sheet cache)
+ * is passed in via `hydratedSheets` and merged in with real `cellData`; only sheets
+ * whose data isn't loaded yet stay shells (they fill in as the host's background
+ * hydration loop warms the cache). Univer still only RENDERS the active sheet's canvas,
+ * so resident-but-not-rendered data costs no more than any spreadsheet keeps in memory.
+ *
+ * Per-sheet style ids (`"1"`, `"2"`, …) are LOCAL to each single-sheet snapshot and
+ * therefore COLLIDE across sheets once several are resident. Every non-active sheet's
+ * style ids are namespaced `"<sheetId>::<styleId>"` and its cells' `s` references are
+ * remapped to match before its styles are folded into the workbook `styles` table. The
+ * active sheet keeps its ORIGINAL (unprefixed) ids so its snapshot round-trips verbatim
+ * on save; an active id like `"1"` can never equal a namespaced `"<sheetId>::1"`, so the
+ * two id spaces are disjoint. Fidelity is identical to rendering a single-sheet snapshot
+ * (the proven path) — merges, images, CF, filters and hyperlinks come through for the
+ * active sheet (its resources are the workbook's), and resident sheets contribute values
+ * + styling for reference resolution.
  */
 import type { WorkbookData } from "./types";
 
@@ -69,19 +83,88 @@ export interface BuildShellWorkbookParams {
   activeSheetId: string;
   /** The active sheet's single-sheet snapshot (its data + styles + resources). */
   activeSnapshot: SingleSheetSnapshot;
+  /**
+   * Other already-fetched sheets (the host's per-sheet cache), keyed by sheetId.
+   * Each becomes RESIDENT — its real `cellData` is merged in (with namespaced style
+   * ids) so cross-sheet formula references resolve against real values instead of an
+   * empty shell. The active sheet is always taken from `activeSnapshot` even if it also
+   * appears here. Sheets absent from this map stay lightweight shells until the host's
+   * background loop hydrates them; a formula referencing a not-yet-resident sheet stays
+   * on its cached value (NO_CALCULATION) and resolves once the cache warms + rebuilds.
+   */
+  hydratedSheets?: Record<string, SingleSheetSnapshot>;
+}
+
+/** Separator for namespaced per-sheet style ids: `"<sheetId>::<styleId>"`. */
+const STYLE_NS = "::";
+
+/** The worksheet object out of a single-sheet snapshot (keyed by id, else the sole entry). */
+function sheetDataOf(snap: SingleSheetSnapshot, sheetId: string): Record<string, unknown> | undefined {
+  const direct = snap.sheets?.[sheetId];
+  if (direct) return direct;
+  const vals = snap.sheets ? Object.values(snap.sheets) : [];
+  return vals.length ? (vals[0] as Record<string, unknown>) : undefined;
 }
 
 /**
- * Assemble the combined workbook: all sheets as tabs, the active one hydrated,
- * the rest as shells. Feed the result to `<LevichSheet snapshot={…}>`.
+ * Prepare a NON-active resident sheet for merging: namespace its style ids under
+ * `"<sheetId>::"` and remap every cell's STRING `s` reference to the prefixed id, so
+ * per-sheet ids can't collide with another sheet's. The source snapshot is never mutated
+ * (the host reuses it verbatim on save) — new cell/row objects are created only where an
+ * `s` string is rewritten; inline-object styles and cells without `s` pass through by
+ * reference. Returns the remapped worksheet data + the prefixed styles to fold into the
+ * workbook `styles` table.
+ */
+function namespaceSheetStyles(
+  sheetId: string,
+  sheetData: Record<string, unknown>,
+  styles: Record<string, unknown> | undefined,
+): { data: Record<string, unknown>; styles: Record<string, unknown> } {
+  const prefixed: Record<string, unknown> = {};
+  if (styles) {
+    for (const [sid, style] of Object.entries(styles)) prefixed[`${sheetId}${STYLE_NS}${sid}`] = style;
+  }
+  const srcCellData = sheetData.cellData as Record<string, Record<string, { s?: unknown }>> | undefined;
+  if (!srcCellData) return { data: sheetData, styles: prefixed };
+  const remapped: Record<string, Record<string, unknown>> = {};
+  for (const [row, cols] of Object.entries(srcCellData)) {
+    const newRow: Record<string, unknown> = {};
+    for (const [col, cell] of Object.entries(cols)) {
+      newRow[col] = cell && typeof cell.s === "string" ? { ...cell, s: `${sheetId}${STYLE_NS}${cell.s}` } : cell;
+    }
+    remapped[row] = newRow;
+  }
+  return { data: { ...sheetData, cellData: remapped }, styles: prefixed };
+}
+
+/**
+ * Assemble the combined workbook: all sheets as tabs; the active sheet + every
+ * `hydratedSheets` entry carry real data (so cross-sheet refs resolve), the rest are
+ * shells. Feed the result to `<LevichSheet snapshot={…}>`.
  */
 export function buildShellWorkbook(params: BuildShellWorkbookParams): WorkbookData {
-  const { documentId, title, manifest, activeSheetId, activeSnapshot } = params;
-  const activeData = activeSnapshot.sheets?.[activeSheetId];
+  const { documentId, title, manifest, activeSheetId, activeSnapshot, hydratedSheets } = params;
+  const activeData = activeSnapshot.sheets?.[activeSheetId] ?? sheetDataOf(activeSnapshot, activeSheetId);
 
+  // Active sheet keeps its ORIGINAL style ids (round-trips verbatim on save); every other
+  // resident sheet is namespaced so per-sheet ids can't collide once many are resident.
+  const styles: Record<string, unknown> = { ...(activeSnapshot.styles ?? {}) };
   const sheets: Record<string, unknown> = {};
   for (const m of manifest) {
-    sheets[m.sheetId] = m.sheetId === activeSheetId && activeData ? activeData : shellSheet(m);
+    const id = m.sheetId;
+    if (id === activeSheetId && activeData) {
+      sheets[id] = activeData;
+      continue;
+    }
+    const snap = hydratedSheets?.[id];
+    const data = snap ? sheetDataOf(snap, id) : undefined;
+    if (snap && data) {
+      const merged = namespaceSheetStyles(id, data, snap.styles);
+      sheets[id] = merged.data;
+      Object.assign(styles, merged.styles);
+    } else {
+      sheets[id] = shellSheet(m);
+    }
   }
 
   return {
@@ -90,7 +173,7 @@ export function buildShellWorkbook(params: BuildShellWorkbookParams): WorkbookDa
     appVersion: "",
     locale: "enUS",
     sheetOrder: manifest.map((m) => m.sheetId),
-    styles: activeSnapshot.styles ?? {},
+    styles,
     sheets,
     // Resources (images, filters, CF, hyperlinks) are keyed by sheetId; only the
     // active sheet's are present, matching the single-sheet snapshot.

@@ -89,7 +89,7 @@ function collapsibleRowPaths(model: ReturnType<typeof computePivotModel>): Map<n
 }
 
 export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(function LevichSheet(props, ref) {
-  const { data, columns, snapshot, anchorCell, freeze, pivot, pivotInteractive, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, sheetBar, readOnly, className, onCellEdit, onColumnWidthsChange, onReady, onImport, onImportFile, onSave, onDownload, onNew, onMakeCopy, onRename, onCopyToExisting, onHideActiveSheet, onShowSheet, hiddenSheetList, canHideActiveSheet, onInsertPivot } = props;
+  const { data, columns, snapshot, anchorCell, activeSheetId, freeze, pivot, pivotInteractive, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, sheetBar, readOnly, className, onCellEdit, onColumnWidthsChange, onReady, onImport, onImportFile, onSave, onDownload, onNew, onMakeCopy, onRename, onCopyToExisting, onHideActiveSheet, onShowSheet, hiddenSheetList, canHideActiveSheet, onInsertPivot } = props;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const univerRef = useRef<{ dispose: () => void } | null>(null);
@@ -365,8 +365,8 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
     // "#" cell (feature #2). Both run at the Steady (3) lifecycle so they aren't
     // overwritten by the engine's initial A1 selection.
     if (snapshot) {
-      const target = anchorCell ?? findHashCell(snapshot);
-      const empties = emptyFormulaCells(snapshot);
+      const target = anchorCell ?? findHashCell(snapshot, activeSheetId);
+      const empties = emptyFormulaCells(snapshot, activeSheetId);
       try {
         const lifeEvent = (univerAPI as unknown as { Event?: Record<string, string> }).Event?.LifeCycleChanged;
         if (lifeEvent) {
@@ -443,7 +443,7 @@ export const LevichSheet = forwardRef<LevichSheetHandle, LevichSheetProps>(funct
     };
     // The component is remounted per dataset via `key` upstream, so this is
     // effectively mount-once; deps cover the rebuild-on-change case.
-  }, [data, columns, snapshot, anchorCell, freeze, pivot, pivotInteractive, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, readOnly, onCellEdit, onColumnWidthsChange]);
+  }, [data, columns, snapshot, anchorCell, activeSheetId, freeze, pivot, pivotInteractive, footer, currencySymbol, comments, columnWidths, getRowKey, toolbar, readOnly, onCellEdit, onColumnWidthsChange]);
 
   // Interactive pivot: apply spec changes IN PLACE via Facade `setValue`, with no
   // remount → no flicker. The build effect lays down the FIRST render (guarded by
