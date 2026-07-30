@@ -24,6 +24,8 @@ import type { UniverAPI } from "../core/create-sheet";
 interface RangeOps {
   getRow(): number;
   getColumn(): number;
+  getHeight?(): number;
+  getWidth?(): number;
   setValues(v: (string | number)[][]): unknown;
   setFontWeight(w: string | null): RangeOps;
   setFontStyle(s: string | null): RangeOps;
@@ -617,12 +619,22 @@ export function LevichMenuBar({ api, onDownload, onOpenFind, onSave, onNew, onIm
         { label: "Copy", shortcut: "⌘C", onClick: () => exec("sheet.command.copy") },
         { label: "Paste", shortcut: "⌘V", onClick: () => exec("sheet.command.paste") },
         {
+          label: "Paste special",
+          items: [
+            { label: "Values only", shortcut: "⌘⇧V", onClick: () => exec("sheet.command.paste-value") },
+            { label: "Format only", onClick: () => exec("sheet.command.paste-format") },
+            { label: "Column width only", onClick: () => exec("sheet.command.paste-col-width") },
+          ],
+        },
+        {
           label: "Delete",
           sep: true,
           items: [
             { label: "Values", onClick: () => exec("sheet.command.clear-selection-content") },
-            { label: "Row", onClick: () => withRange((r) => sheet()?.deleteRows(r.getRow(), 1)), sep: true },
-            { label: "Column", onClick: () => withRange((r) => sheet()?.deleteColumns(r.getColumn(), 1)) },
+            { label: "Row", onClick: () => withRange((r) => sheet()?.deleteRows(r.getRow(), r.getHeight?.() ?? 1)), sep: true },
+            { label: "Column", onClick: () => withRange((r) => sheet()?.deleteColumns(r.getColumn(), r.getWidth?.() ?? 1)) },
+            { label: "Cells and shift up", onClick: () => exec("sheet.command.delete-range-move-up"), sep: true },
+            { label: "Cells and shift left", onClick: () => exec("sheet.command.delete-range-move-left") },
           ],
         },
         { label: "Find and replace", shortcut: "⌘⇧H", onClick: () => onOpenFind?.(), sep: true },
@@ -671,6 +683,8 @@ export function LevichMenuBar({ api, onDownload, onOpenFind, onSave, onNew, onIm
         { label: "Row below", onClick: () => withRange((r) => sheet()?.insertRowAfter(r.getRow())) },
         { label: "Column left", onClick: () => withRange((r) => sheet()?.insertColumnBefore(r.getColumn())), sep: true },
         { label: "Column right", onClick: () => withRange((r) => sheet()?.insertColumnAfter(r.getColumn())) },
+        { label: "Cells and shift down", onClick: () => exec("sheet.command.insert-range-move-down"), sep: true },
+        { label: "Cells and shift right", onClick: () => exec("sheet.command.insert-range-move-right") },
         { label: "Note", onClick: () => exec("sheet.command.toggle-note-popup"), sep: true },
         { label: "Link", onClick: () => exec("sheet.operation.insert-hyper-link") },
         { label: "Chart", disabled: true, sep: true },
@@ -746,6 +760,7 @@ export function LevichMenuBar({ api, onDownload, onOpenFind, onSave, onNew, onIm
       items: [
         { label: "Sort range A → Z", onClick: () => exec("sheet.command.sort-range-asc") },
         { label: "Sort range Z → A", onClick: () => exec("sheet.command.sort-range-desc") },
+        { label: "Advanced range sort…", onClick: () => exec("sheet.command.sort-range-custom") },
         { label: "Create a filter", onClick: () => exec("sheet.command.smart-toggle-filter"), sep: true },
         { label: "Data validation", onClick: () => apiOf()?.executeCommand("data-validation.operation.open-validation-panel", { isAdd: true }) },
       ],
