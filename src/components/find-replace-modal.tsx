@@ -27,6 +27,7 @@ interface FRange {
 interface FSheet {
   getRange(row: number, column: number): FRange;
   scrollToCell(row: number, column: number): unknown;
+  getSheetId(): string;
 }
 interface FSnapshot {
   sheetOrder?: string[];
@@ -108,7 +109,16 @@ export function FindReplaceModal({ api, open, onClose }: FindReplaceModalProps) 
   }, [find, caseSensitive, wholeCell]);
 
   const cellsOf = (snap: FSnapshot | undefined): Record<number, Record<number, SnapCell>> => {
-    const sheetId = snap?.sheetOrder?.[0] ?? (snap?.sheets ? Object.keys(snap.sheets)[0] : undefined);
+    // Scan the ACTIVE sheet — the same sheet activateOne()/applyHighlights() scroll
+    // and select on. Previously this hard-read sheetOrder[0] (the first tab), so on
+    // any non-first tab (pivots, details) matches were computed from the wrong sheet
+    // and their coords landed at A1/top-left on the visible sheet. Fall back to the
+    // first sheet only when the active id can't be resolved.
+    const activeId = sheet()?.getSheetId();
+    const sheetId =
+      activeId && snap?.sheets?.[activeId]
+        ? activeId
+        : snap?.sheetOrder?.[0] ?? (snap?.sheets ? Object.keys(snap.sheets)[0] : undefined);
     return (sheetId && snap?.sheets?.[sheetId]?.cellData) || {};
   };
 
@@ -166,7 +176,11 @@ export function FindReplaceModal({ api, open, onClose }: FindReplaceModalProps) 
     if (!m) return;
     const s = sheet();
     s?.getRange(m.row, m.col).activate(); // selection border on the current match
-    s?.scrollToCell(m.row, m.col); // bring it into view
+    // Univer's scrollToCell pins the target to the exact top-left of the viewport,
+    // which reads as "every result jumps to the top-left corner". Anchor a few rows
+    // above and one column left so the match lands with surrounding context (and
+    // early columns like A stay visible), closer to Google Sheets' reveal.
+    s?.scrollToCell(Math.max(0, m.row - 3), Math.max(0, m.col - 1));
   };
 
   const doFind = () => {

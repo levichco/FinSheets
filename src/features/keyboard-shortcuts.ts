@@ -182,7 +182,16 @@ export function attachKeyboardShortcuts(getCtx: () => ShortcutContext): () => vo
     // ---- Alt-based -----------------------------------------------------------
     if (alt && !mod) {
       if (shift && code === "Digit5") { toggleStyle("st"); return; } // Strikethrough (Sheets: Alt+Shift+5) — toggles + re-lights the toolbar S̶ button
-      if (code === "Equal") { take(); try { insertAggregate(api as unknown as FunctionsApi, "SUM"); } catch { /* */ } return; } // AutoSum
+      // AutoSum (Alt+=). Do NOT hijack the `=` key when the user is producing a
+      // literal `=` to start/continue a formula: skip while a cell/formula editor
+      // is focused, and skip on layouts that emit `=` via AltGr (Windows/Linux) —
+      // otherwise pressing `=` there gets turned into AutoSum and "you can't type
+      // formulas". Toolbar Σ still offers AutoSum.
+      if (code === "Equal" && !editing() && !e.getModifierState?.("AltGraph")) {
+        take();
+        try { insertAggregate(api as unknown as FunctionsApi, "SUM"); } catch { /* */ }
+        return;
+      }
       if (code === "ArrowDown") { return moveSheet(1); }   // next sheet
       if (code === "ArrowUp") { return moveSheet(-1); }    // previous sheet
     }

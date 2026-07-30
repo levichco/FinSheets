@@ -750,6 +750,36 @@ export function LevichMenuBar({ api, onDownload, onOpenFind, onSave, onNew, onIm
         { label: "Data validation", onClick: () => apiOf()?.executeCommand("data-validation.operation.open-validation-panel", { isAdd: true }) },
       ],
     },
+    // Tools / Extensions / Help complete the Google-Sheets top-bar structure
+    // (File · Edit · View · Insert · Format · Data · Tools · Extensions · Help).
+    // Actions with no engine support are disabled stubs, matching how Chart /
+    // Image / Theme are already stubbed in the menus above.
+    {
+      label: "Tools",
+      items: [
+        { label: "Data validation", onClick: () => apiOf()?.executeCommand("data-validation.operation.open-validation-panel", { isAdd: true }) },
+        { label: "Conditional formatting", onClick: () => exec("sheet.operation.open-conditional-formatting-panel"), sep: true },
+        { label: "Spelling", disabled: true },
+        { label: "Autocomplete", disabled: true },
+        { label: "Notification settings", disabled: true },
+      ],
+    },
+    {
+      label: "Extensions",
+      items: [
+        { label: "Add-ons", disabled: true },
+        { label: "Apps Script", disabled: true },
+        { label: "Macros", disabled: true },
+      ],
+    },
+    {
+      label: "Help",
+      items: [
+        { label: "Function list", disabled: true },
+        { label: "Keyboard shortcuts", disabled: true },
+        { label: "About FinSheets", disabled: true },
+      ],
+    },
   ];
 
   // Track the live selection so "Freeze up to row/column" always reflects the

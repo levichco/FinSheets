@@ -1171,8 +1171,13 @@ export function LevichToolbar({ api, onOpenFind }: LevichToolbarProps) {
       const t = ev.target as HTMLElement;
       if (!t.closest("[data-levich-dd]")) setOpenId(null);
     };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
+    // Capture phase: Univer's canvas calls stopPropagation() on a cell mousedown,
+    // so a bubble-phase document listener never fires and the dropdown would stay
+    // open when clicking anywhere on the grid (only clicks on normal DOM like the
+    // menu bar closed it). Capturing on the way DOWN dismisses it first. Mirrors
+    // the menu bar's listener (levich-menu-bar.tsx) and every other dropdown.
+    document.addEventListener("mousedown", h, true);
+    return () => document.removeEventListener("mousedown", h, true);
   }, [openId]);
 
   // Reflect the selected cell's formatting in the toolbar (B/I/U/S pressed

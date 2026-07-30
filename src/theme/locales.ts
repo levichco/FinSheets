@@ -9,6 +9,57 @@
  * onto the base locale ourselves via `deepMergeLocales` (see create-sheet.ts).
  */
 export const levichLocale: Record<string, unknown> = {
+  // Right-click context menu — Univer's stock labels are Title Case with
+  // engine-specific terms ("Copy Special", "Protect Rows And Columns"); relabel
+  // to Google Sheets' sentence-case wording. Deep-merged, so unlisted keys keep
+  // their Univer defaults.
+  "sheets-ui": {
+    rightClick: {
+      copy: "Copy",
+      cut: "Cut",
+      paste: "Paste",
+      copySpecial: "Copy special",
+      pasteSpecial: "Paste special",
+      pasteValue: "Paste values only",
+      pasteFormat: "Paste format only",
+      pasteColWidth: "Paste column width only",
+      pasteBesidesBorder: "Paste all except borders",
+      insert: "Insert",
+      insertRow: "Insert row",
+      insertRowBefore: "Insert 1 row above",
+      insertColumn: "Insert column",
+      insertColumnBefore: "Insert 1 column left",
+      delete: "Delete",
+      deleteCell: "Delete cells",
+      insertCell: "Insert cells",
+      deleteSelected: "Delete ",
+      deleteSelectedRow: "Delete row",
+      deleteSelectedColumn: "Delete column",
+      hide: "Hide",
+      hideSelectedRow: "Hide row",
+      hideSelectedColumn: "Hide column",
+      showHideRow: "Show rows",
+      showHideColumn: "Show columns",
+      rowHeight: "Resize row",
+      columnWidth: "Resize column",
+      clearSelection: "Clear",
+      clearContent: "Clear contents",
+      clearFormat: "Clear formatting",
+      clearAll: "Clear all",
+      freeze: "Freeze",
+      freezeCol: "Freeze up to column {0}",
+      freezeRow: "Freeze up to row {0}",
+      freezeFirstCol: "Freeze first column",
+      freezeFirstRow: "Freeze first row",
+      cancelFreeze: "Unfreeze",
+      protectRange: "Protect range",
+      editProtectRange: "Edit protected range",
+      removeProtectRange: "Remove protection",
+      turnOnProtectRange: "Add protected range",
+      viewAllProtectArea: "View all protected ranges",
+      textToNumber: "Convert to number",
+    },
+  },
   // Filter funnel panel — match Google Sheets wording.
   "sheets-sort-ui": {
     general: {
