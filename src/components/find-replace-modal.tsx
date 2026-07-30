@@ -17,6 +17,8 @@ interface CellStyle {
 }
 interface SnapCell {
   v?: unknown;
+  /** Formula text (with leading `=`) when the cell is a formula. */
+  f?: string;
   s?: string | CellStyle;
 }
 interface FRange {
@@ -203,12 +205,32 @@ export function FindReplaceModal({ api, open, onClose }: FindReplaceModalProps) 
     return caseSensitive ? text.split(find).join(replace) : text.replace(new RegExp(escapeRegExp(find), "gi"), replace);
   };
 
+  /**
+   * Write the replacement into one cell WITHOUT clobbering formulas. Previously this
+   * read a formula cell's computed `.v` and setValue()'d a static string, silently
+   * turning `=SUM(...)` into text (data loss). Now: for a formula cell we replace
+   * within the formula TEXT and re-write it as a formula; if the term isn't in the
+   * text (the match was on the computed result) or it's a whole-cell replace, we
+   * leave the formula untouched. Literal cells behave as before.
+   */
+  const writeReplacement = (m: Match): void => {
+    const s = sheet();
+    const cell = cellsOf(snapshot())[m.row]?.[m.col];
+    const formula = typeof cell?.f === "string" ? cell.f : null;
+    if (formula) {
+      if (wholeCell) return; // whole-cell replace would destroy the formula
+      const nextF = caseSensitive ? formula.split(find).join(replace) : formula.replace(new RegExp(escapeRegExp(find), "gi"), replace);
+      if (nextF !== formula && nextF.startsWith("=")) s?.getRange(m.row, m.col).setValue(nextF);
+      return;
+    }
+    s?.getRange(m.row, m.col).setValue(replaceOne(cellText(cell?.v)));
+  };
+
   const replaceCurrent = () => {
     if (idx < 0 || !matches[idx] || !find) return;
     const m = matches[idx];
-    const cur = cellText(cellsOf(snapshot())[m.row]?.[m.col]?.v);
     clearHighlights();
-    sheet()?.getRange(m.row, m.col).setValue(replaceOne(cur));
+    writeReplacement(m);
     const found = collect();
     setMatches(found);
     const next = found.length ? Math.min(idx, found.length - 1) : -1;
@@ -220,11 +242,7 @@ export function FindReplaceModal({ api, open, onClose }: FindReplaceModalProps) 
   const replaceAll = () => {
     if (!find) return;
     clearHighlights();
-    const cellData = cellsOf(snapshot());
-    const s = sheet();
-    for (const m of collect()) {
-      s?.getRange(m.row, m.col).setValue(replaceOne(cellText(cellData[m.row]?.[m.col]?.v)));
-    }
+    for (const m of collect()) writeReplacement(m);
     setMatches([]);
     setIdx(-1);
   };

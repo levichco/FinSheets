@@ -29,10 +29,18 @@ interface KRange {
   setFontWeight(w: string): unknown;
   setFontStyle(s: string): unknown;
   setFontLine(l: string): unknown;
+  getRow(): number;
+  getColumn(): number;
+  getHeight?: () => number;
+  getWidth?: () => number;
+  activate?: () => unknown;
 }
 interface KSheet {
   getSheetId?: () => string;
   getSheetName?: () => string;
+  getMaxColumns?: () => number;
+  getMaxRows?: () => number;
+  getRange?: (row: number, column: number, numRows?: number, numColumns?: number) => KRange | null;
 }
 interface KWorkbook {
   getActiveRange?: () => KRange | null;
@@ -71,7 +79,9 @@ export function attachKeyboardShortcuts(getCtx: () => ShortcutContext): () => vo
     const shift = e.shiftKey;
     const alt = e.altKey;
     const code = e.code;
-    if (!mod && !alt && !(shift && code === "F11")) return; // fast bail on plain typing
+    // fast bail on plain typing — but let Shift+F11 (new sheet) and Shift+Space
+    // (select row, Google Sheets) through to their handlers below.
+    if (!mod && !alt && !(shift && (code === "F11" || code === "Space"))) return;
 
     const ctx = getCtx();
     const api = ctx.api as KApi | null;
@@ -134,9 +144,43 @@ export function attachKeyboardShortcuts(getCtx: () => ShortcutContext): () => vo
         /* ignore */
       }
     };
+    // Google Sheets: Shift+Space selects the active row(s); Ctrl+Space the column(s).
+    const selectRow = () => {
+      if (editing()) return;
+      take();
+      try {
+        const sh = wb()?.getActiveSheet?.();
+        const r = range();
+        if (!sh || !r) return;
+        const cols = sh.getMaxColumns?.() ?? 26;
+        sh.getRange?.(r.getRow(), 0, r.getHeight?.() ?? 1, cols)?.activate?.();
+      } catch {
+        /* ignore */
+      }
+    };
+    const selectColumn = () => {
+      if (editing()) return;
+      take();
+      try {
+        const sh = wb()?.getActiveSheet?.();
+        const r = range();
+        if (!sh || !r) return;
+        const rows = sh.getMaxRows?.() ?? 1000;
+        sh.getRange?.(0, r.getColumn(), rows, r.getWidth?.() ?? 1)?.activate?.();
+      } catch {
+        /* ignore */
+      }
+    };
+
+    // ---- Shift-only (no accelerator) ---------------------------------------
+    if (shift && !mod && !alt) {
+      if (code === "Space") { selectRow(); return; }                            // Select row (Google Sheets)
+    }
 
     // ---- Browser-reserved / custom-UI (accelerator = ⌘/Ctrl) ---------------
     if (mod && !alt) {
+      if (code === "Space" && !shift) { selectColumn(); return; }               // Select column (Google Sheets)
+      if (code === "KeyV" && shift) { take(); try { api?.executeCommand?.("sheet.command.paste-value"); } catch { /* */ } return; } // Paste values only
       // Character-style toggles routed through the Facade so the toolbar's
       // B/I/U buttons reflect the new state (native ⌘B doesn't re-light them).
       if (code === "KeyB" && !shift) { toggleStyle("bl"); return; }             // Bold

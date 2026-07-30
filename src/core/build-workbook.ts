@@ -141,7 +141,15 @@ export function buildWorkbook(data: SheetData, columns: ColumnDef[], options: Bu
       row[labelColIndex] = { v: footer.label, s: labelStyle };
       if (data.length > 0) {
         const letter = columnLetter(sumColIndex);
-        row[sumColIndex] = { f: `=SUM(${letter}2:${letter}${data.length + 1})`, s: moneyStyle };
+        // Precompute the total. NO_CALCULATION skips formula eval on load, so without a
+        // cached `v` the footer SUM renders BLANK until the first edit. Emit both: `v`
+        // shows the value immediately, `f` keeps it live (recalcs on any edit). Matches
+        // what =SUM over the numeric cells produces (non-numeric contributes 0).
+        const total = data.reduce((acc, rec) => {
+          const n = Number(rec[footer.sumColumnKey]);
+          return acc + (Number.isFinite(n) ? n : 0);
+        }, 0);
+        row[sumColIndex] = { f: `=SUM(${letter}2:${letter}${data.length + 1})`, v: total, s: moneyStyle };
       } else {
         row[sumColIndex] = { v: 0, s: moneyStyle };
       }
