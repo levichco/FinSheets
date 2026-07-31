@@ -33,6 +33,21 @@ export { computePivotModel, renderPivotModel, valueLabel, matchDrillRows, drillT
 export { LEVICH_BRAND } from "./theme/brand";
 export { setImportRangeResolver, registerImportRange } from "./features/import-range";
 export type { ImportRangeResolver } from "./features/import-range";
+export {
+  groupRows,
+  groupCols,
+  collapseGroup,
+  expandGroup,
+  collapseGroupsInRange,
+  expandGroupsInRange,
+  ungroup,
+  collapseAll,
+  expandAll,
+  getGroupsForActiveSheet,
+  hasGroups,
+  selectionSpan,
+} from "./features/grouping";
+export type { SheetGroup, Orientation } from "./features/grouping";
 
 export type {
   SheetData,

@@ -16,6 +16,16 @@ import { parseXlsxToSnapshot, inlineSheetStyles, placeImportImages, sheetIndexTo
 import type { WorkbookData } from "../core/types";
 import { printSheet } from "../core/print-sheet";
 import { attachKeyboardShortcuts, type ShortcutContext } from "../features/keyboard-shortcuts";
+import {
+  groupRows as groupRowsApi,
+  groupCols as groupColsApi,
+  ungroup as ungroupApi,
+  collapseGroupsInRange,
+  expandGroupsInRange,
+  collapseAll as collapseAllGroups,
+  expandAll as expandAllGroups,
+  selectionSpan,
+} from "../features/grouping";
 import { ImportModal, type ImportLocation } from "../components/import-modal";
 import { RenameModal } from "../components/rename-modal";
 import type { UniverAPI } from "../core/create-sheet";
@@ -588,6 +598,32 @@ export function LevichMenuBar({ api, onDownload, onOpenFind, onSave, onNew, onIm
     return h.map((s) => ({ label: s.getSheetName?.() ?? "Sheet", onClick: () => showHiddenSheet(s) }));
   };
 
+  // --- Row / column grouping (free-tier collapse/expand) ---------------------
+  // Acts on the current selection. `api` is the live Facade UniverAPI; the
+  // grouping helpers read the selection span + hide/show rows/cols themselves.
+  const groupApi = () => api as unknown as UniverAPI | null;
+  const doGroup = (orientation: "row" | "col") => {
+    const a = groupApi();
+    if (!a) return;
+    const span = selectionSpan(a, orientation);
+    if (!span) return;
+    if (orientation === "row") groupRowsApi(a, span[0], span[1]);
+    else groupColsApi(a, span[0], span[1]);
+  };
+  const forEachOrientation = (fn: (o: "row" | "col", s: number, e: number) => void) => {
+    const a = groupApi();
+    if (!a) return;
+    for (const o of ["row", "col"] as const) {
+      const span = selectionSpan(a, o);
+      if (span) fn(o, span[0], span[1]);
+    }
+  };
+  const doCollapseGroup = () => forEachOrientation((o, s, e) => collapseGroupsInRange(groupApi()!, o, s, e));
+  const doExpandGroup = () => forEachOrientation((o, s, e) => expandGroupsInRange(groupApi()!, o, s, e));
+  const doUngroup = () => forEachOrientation((o, s, e) => ungroupApi(groupApi()!, o, s, e));
+  const doCollapseAll = () => { const a = groupApi(); if (a) collapseAllGroups(a); };
+  const doExpandAll = () => { const a = groupApi(); if (a) expandAllGroups(a); };
+
   const menus: Menu[] = [
     {
       label: "File",
@@ -670,6 +706,19 @@ export function LevichMenuBar({ api, onDownload, onOpenFind, onSave, onNew, onIm
           label: "Zoom",
           sep: true,
           items: ZOOM_LEVELS.map((z) => ({ label: `${z}%`, onClick: () => sheet()?.zoom(z / 100) })),
+        },
+        {
+          label: "Group",
+          sep: true,
+          items: [
+            { label: "Group rows", onClick: () => doGroup("row") },
+            { label: "Group columns", onClick: () => doGroup("col") },
+            { label: "Ungroup", onClick: doUngroup, sep: true },
+            { label: "Collapse group", onClick: doCollapseGroup },
+            { label: "Expand group", onClick: doExpandGroup },
+            { label: "Collapse all groups", onClick: doCollapseAll, sep: true },
+            { label: "Expand all groups", onClick: doExpandAll },
+          ],
         },
         { label: "Hide sheet", sep: true, disabled: onHideActiveSheet ? canHideActiveSheet === false : visibleSheets().length <= 1, onClick: onHideActiveSheet ?? hideActiveSheet },
         { label: "Show sheets", items: showSheetItems() },
