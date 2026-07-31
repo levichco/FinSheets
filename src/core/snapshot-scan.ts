@@ -85,10 +85,13 @@ export function emptyFormulaCells(snapshot: unknown, activeSheetId?: string): Ar
       // renders #NAME?/#REF! (the "formula broken" regression). NO_CALCULATION already
       // preserves the cell's cached value verbatim, and any genuinely-empty cross-sheet
       // formula recomputes correctly on the next edit/recalc once the target is resident —
-      // so keeping this guard is strictly safe. A "!" in an Excel formula reliably marks a
-      // sheet-qualified reference; same-sheet formulas never contain one, so those still
-      // get their blank totals filled in.
-      const referencesOtherSheet = f.includes("!");
+      // so keeping this guard is strictly safe. A "!" marks a sheet-qualified reference, but
+      // ONLY outside a string literal: a same-sheet formula can legitimately contain "!"
+      // inside a double-quoted string (=IF(A1>0,"Done!","")), which must NOT be mistaken for
+      // a cross-sheet ref (that would wrongly skip its recompute and leave it blank on load).
+      // Strip double-quoted literals first; sheet names are bare or single-quoted, so this
+      // never hides a real cross-sheet reference.
+      const referencesOtherSheet = f.replace(/"(?:[^"]|"")*"/g, "").includes("!");
       if (hasFormula && noCachedValue && !referencesOtherSheet) out.push({ row: Number(r), column: Number(c), formula: f });
     }
   }

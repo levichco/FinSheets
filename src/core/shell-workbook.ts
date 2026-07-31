@@ -87,8 +87,9 @@ export interface BuildShellWorkbookParams {
    * Other already-fetched sheets (the host's per-sheet cache), keyed by sheetId.
    * Each becomes RESIDENT — its real `cellData` is merged in (with namespaced style
    * ids) so cross-sheet formula references resolve against real values instead of an
-   * empty shell. The active sheet is always taken from `activeSnapshot` even if it also
-   * appears here. Sheets absent from this map stay lightweight shells until the host's
+   * empty shell. The active sheet is PREFERENTIALLY taken from its entry here (the live
+   * cache, freshest) and only falls back to `activeSnapshot` when absent. Sheets absent
+   * from this map stay lightweight shells until the host's
    * background loop hydrates them; a formula referencing a not-yet-resident sheet stays
    * on its cached value (NO_CALCULATION) and resolves once the cache warms + rebuilds.
    */
@@ -144,11 +145,19 @@ function namespaceSheetStyles(
  */
 export function buildShellWorkbook(params: BuildShellWorkbookParams): WorkbookData {
   const { documentId, title, manifest, activeSheetId, activeSnapshot, hydratedSheets } = params;
-  const activeData = activeSnapshot.sheets?.[activeSheetId] ?? sheetDataOf(activeSnapshot, activeSheetId);
+
+  // The active sheet's AUTHORITATIVE data is the host's LIVE cache entry (`hydratedSheets`,
+  // kept current by the host's captureLive) when present — NOT the load-time `activeSnapshot`.
+  // Sourcing the active sheet from the stale snapshot would silently REVERT the user's live
+  // edits every time this workbook rebuilds (e.g. when the background-hydration pass finishes,
+  // or a tab is renamed/recoloured) — a data-loss regression. Fall back to `activeSnapshot`
+  // when the cache doesn't have the active sheet (initial load, before the first capture).
+  const activeSrc = hydratedSheets?.[activeSheetId] ?? activeSnapshot;
+  const activeData = activeSrc.sheets?.[activeSheetId] ?? sheetDataOf(activeSrc, activeSheetId);
 
   // Active sheet keeps its ORIGINAL style ids (round-trips verbatim on save); every other
   // resident sheet is namespaced so per-sheet ids can't collide once many are resident.
-  const styles: Record<string, unknown> = { ...(activeSnapshot.styles ?? {}) };
+  const styles: Record<string, unknown> = { ...(activeSrc.styles ?? {}) };
   const sheets: Record<string, unknown> = {};
   for (const m of manifest) {
     const id = m.sheetId;
@@ -176,7 +185,8 @@ export function buildShellWorkbook(params: BuildShellWorkbookParams): WorkbookDa
     styles,
     sheets,
     // Resources (images, filters, CF, hyperlinks) are keyed by sheetId; only the
-    // active sheet's are present, matching the single-sheet snapshot.
-    resources: activeSnapshot.resources ?? [],
+    // active sheet's are present, matching the single-sheet snapshot. Sourced from the
+    // live cache entry (activeSrc) for the same edit-preservation reason as the cell data.
+    resources: activeSrc.resources ?? [],
   };
 }

@@ -76,4 +76,16 @@ describe("emptyFormulaCells (feature #12 — recompute only uncached formula cel
     });
     expect(emptyFormulaCells(s)).toEqual([{ row: 1, column: 0, formula: "=SUM(A1:A3)" }]);
   });
+
+  it("still RECOMPUTES a same-sheet formula whose '!' is inside a string literal (not a cross-sheet ref)", () => {
+    const s = snap({
+      1: { 0: { f: '=IF(A1>0,"Done!","")' } }, // "!" is in a quoted literal → same-sheet → recompute
+      2: { 0: { f: '=A1&"!"' } }, // trailing "!" literal → same-sheet → recompute
+      3: { 0: { f: "='P&L'!B12" } }, // genuine cross-sheet ref → still skipped
+    });
+    expect(emptyFormulaCells(s)).toEqual([
+      { row: 1, column: 0, formula: '=IF(A1>0,"Done!","")' },
+      { row: 2, column: 0, formula: '=A1&"!"' },
+    ]);
+  });
 });
