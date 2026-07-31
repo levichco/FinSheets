@@ -206,7 +206,10 @@ export function expandGroupsInRange(api: UniverAPI, orientation: Orientation, st
   const sid = activeSheetId(api);
   if (!sheet || sid == null) return 0;
   const [s, e] = normalise(start, end);
-  const hit = groupsOf(sid).filter((g) => g.orientation === orientation && overlaps(g, s, e));
+  // Widen the selection by one on each side: a COLLAPSED group's own rows/cols are hidden,
+  // so the user can only select the visible line adjacent to it — that adjacent selection must
+  // still expand it. Harmless for already-expanded groups (re-expand is a no-op).
+  const hit = groupsOf(sid).filter((g) => g.orientation === orientation && overlaps(g, Math.max(0, s - 1), e + 1));
   for (const g of hit) {
     g.collapsed = false;
     applyHidden(sheet, g, false);
