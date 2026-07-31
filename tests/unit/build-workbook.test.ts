@@ -43,6 +43,26 @@ describe("buildWorkbook", () => {
     expect(s.cellData[1][1].v).toBe(-349621.87);
   });
 
+  it("footer SUM row carries a PRECOMPUTED value (not blank on load under NO_CALCULATION) plus the live formula", () => {
+    const wb = buildWorkbook(
+      [
+        { date: "a", amount: 100, note: "" },
+        { date: "b", amount: 250, note: "" },
+        { date: "c", amount: 50, note: "" },
+      ],
+      columns,
+      { footer: { label: "Total", sumColumnKey: "amount" } },
+    );
+    const s = sheet(wb);
+    // 3 data rows (1..3) + header (0) → footer at row 4, "amount" is column index 1.
+    const footerCell = s.cellData[4][1] as { v?: unknown; f?: string };
+    // The bug: only `f` was set, so NO_CALCULATION left the total BLANK on load.
+    expect(footerCell.v).toBe(400); // 100 + 250 + 50, precomputed in JS
+    expect(footerCell.f).toContain("SUM"); // still a live formula (recalcs on edit)
+    // Label sits one column left of the SUM cell.
+    expect((s.cellData[4][0] as { v?: unknown }).v).toBe("Total");
+  });
+
   it("applies comment pre-fill to the editable column by row key", () => {
     const wb = buildWorkbook([{ date: "x", amount: 1, note: "" }], columns, {
       rowKeys: ["r1"],
